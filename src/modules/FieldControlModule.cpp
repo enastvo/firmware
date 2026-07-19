@@ -236,8 +236,17 @@ void FieldControlModule::handleNetOp(const meshtastic_MeshPacket &mp, uint32_t r
     }
     case meshtastic_NetOp_Kind_RECV: {
         uint8_t buf[140];
-        int n = NetControl::tcpRecv(buf, sizeof(buf), 3000);
-        LOG_INFO("FieldControl: NetOp RECV n=%d", n);
+        // 0 means "use the default" for backwards compatibility with clients that don't
+        // set these fields; caps protect the module from a client asking to block for an
+        // unreasonably long time (RECV still runs on the main packet-handling path, unlike
+        // ScriptOp.EXECUTE which got a background task in Phase 6).
+        size_t len = op.recv_len == 0 ? sizeof(buf) : op.recv_len;
+        len = len > sizeof(buf) ? sizeof(buf) : len;
+        uint32_t timeoutMs = op.recv_timeout_ms == 0 ? 3000 : op.recv_timeout_ms;
+        timeoutMs = timeoutMs > 15000 ? 15000 : timeoutMs;
+
+        int n = NetControl::tcpRecv(buf, len, timeoutMs);
+        LOG_INFO("FieldControl: NetOp RECV len=%u timeout=%ums n=%d", (unsigned)len, timeoutMs, n);
         replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "not connected", n > 0 ? buf : NULL, n > 0 ? (size_t)n : 0);
         break;
     }

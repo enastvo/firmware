@@ -63,6 +63,10 @@ typedef struct _meshtastic_NetOp {
     char host[64];
     uint32_t port;
     meshtastic_NetOp_data_t data;
+    /* Only used for RECV. 0 means "use the default" (140 bytes / 3000ms) for
+ backwards compatibility with clients that don't set these. */
+    uint32_t recv_len;
+    uint32_t recv_timeout_ms;
 } meshtastic_NetOp;
 
 typedef PB_BYTES_ARRAY_T(160) meshtastic_ScriptOp_chunk_data_t;
@@ -130,13 +134,13 @@ extern "C" {
 /* Initializer values for message structs */
 #define meshtastic_WifiOp_init_default           {_meshtastic_WifiOp_Kind_MIN, "", ""}
 #define meshtastic_BtOp_init_default             {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
-#define meshtastic_NetOp_init_default            {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}}
+#define meshtastic_NetOp_init_default            {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}, 0, 0}
 #define meshtastic_ScriptOp_init_default         {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_default      {0, "", {0, {0}}}
 #define meshtastic_FieldMessage_init_default     {0, 0, {meshtastic_WifiOp_init_default}}
 #define meshtastic_WifiOp_init_zero              {_meshtastic_WifiOp_Kind_MIN, "", ""}
 #define meshtastic_BtOp_init_zero                {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
-#define meshtastic_NetOp_init_zero               {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}}
+#define meshtastic_NetOp_init_zero               {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}, 0, 0}
 #define meshtastic_ScriptOp_init_zero            {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_zero         {0, "", {0, {0}}}
 #define meshtastic_FieldMessage_init_zero        {0, 0, {meshtastic_WifiOp_init_zero}}
@@ -154,6 +158,8 @@ extern "C" {
 #define meshtastic_NetOp_host_tag                2
 #define meshtastic_NetOp_port_tag                3
 #define meshtastic_NetOp_data_tag                4
+#define meshtastic_NetOp_recv_len_tag            5
+#define meshtastic_NetOp_recv_timeout_ms_tag     6
 #define meshtastic_ScriptOp_kind_tag             1
 #define meshtastic_ScriptOp_script_id_tag        2
 #define meshtastic_ScriptOp_chunk_index_tag      3
@@ -191,7 +197,9 @@ X(a, STATIC,   SINGULAR, STRING,   char_uuid,         5)
 X(a, STATIC,   SINGULAR, UENUM,    kind,              1) \
 X(a, STATIC,   SINGULAR, STRING,   host,              2) \
 X(a, STATIC,   SINGULAR, UINT32,   port,              3) \
-X(a, STATIC,   SINGULAR, BYTES,    data,              4)
+X(a, STATIC,   SINGULAR, BYTES,    data,              4) \
+X(a, STATIC,   SINGULAR, UINT32,   recv_len,          5) \
+X(a, STATIC,   SINGULAR, UINT32,   recv_timeout_ms,   6)
 #define meshtastic_NetOp_CALLBACK NULL
 #define meshtastic_NetOp_DEFAULT NULL
 
@@ -247,7 +255,7 @@ extern const pb_msgdesc_t meshtastic_FieldMessage_msg;
 #define meshtastic_BtOp_size                     152
 #define meshtastic_FieldMessage_size             209
 #define meshtastic_FieldResult_size              178
-#define meshtastic_NetOp_size                    139
+#define meshtastic_NetOp_size                    151
 #define meshtastic_ScriptOp_size                 200
 #define meshtastic_WifiOp_size                   101
 
