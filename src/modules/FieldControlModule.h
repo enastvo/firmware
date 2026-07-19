@@ -21,9 +21,9 @@
  * "fieldctrl" private channel (kept for a future broadcast-to-many-Agents path
  * where PKI, which is inherently point-to-point, doesn't apply).
  *
- * Phase 1 only implements WifiOp.STATUS, returning a stub result, to prove the
- * protobuf schema / unicast-with-ack / authorization plumbing works end to end
- * before any real WiFi/BT/script logic is added in later phases.
+ * Phase 2 adds real WiFi control (WifiControl, see src/fieldcontrol/) for
+ * WifiOp SCAN/ASSOCIATE/DISASSOCIATE/STATUS. BtOp/NetOp/ScriptOp are still stubs
+ * for later phases.
  */
 class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
 {
@@ -34,8 +34,10 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
     virtual bool handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded) override;
 
   private:
-    void replyWith(const meshtastic_MeshPacket &req, uint32_t requestId, bool success, const char *error);
+    void replyWith(const meshtastic_MeshPacket &req, uint32_t requestId, bool success, const char *error,
+                    const uint8_t *result = nullptr, size_t resultLen = 0);
     bool isAuthorized(const meshtastic_MeshPacket &mp);
+    void handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_WifiOp &op);
 };
 
 extern FieldControlModule *fieldControlModule;

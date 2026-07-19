@@ -2,6 +2,7 @@
 #include "MeshService.h"
 #include "Router.h"
 #include "configuration.h"
+#include "fieldcontrol/WifiControl.h"
 #include "mesh/Channels.h"
 #include <cstring>
 
@@ -24,7 +25,8 @@ bool FieldControlModule::isAuthorized(const meshtastic_MeshPacket &mp)
     return strcasecmp(ch.settings.name, "fieldctrl") == 0;
 }
 
-void FieldControlModule::replyWith(const meshtastic_MeshPacket &req, uint32_t requestId, bool success, const char *error)
+void FieldControlModule::replyWith(const meshtastic_MeshPacket &req, uint32_t requestId, bool success, const char *error,
+                                    const uint8_t *result, size_t resultLen)
 {
     meshtastic_FieldMessage r = meshtastic_FieldMessage_init_default;
     r.request_id = requestId;
@@ -33,10 +35,79 @@ void FieldControlModule::replyWith(const meshtastic_MeshPacket &req, uint32_t re
     if (error) {
         strncpy(r.response.error, error, sizeof(r.response.error) - 1);
     }
+    if (result && resultLen) {
+        size_t n = resultLen < sizeof(r.response.result.bytes) ? resultLen : sizeof(r.response.result.bytes);
+        memcpy(r.response.result.bytes, result, n);
+        r.response.result.size = n;
+    }
 
     meshtastic_MeshPacket *p = allocDataProtobuf(r);
     setReplyTo(p, req);
     myReply = p;
+}
+
+// Result encoding for WifiOp.STATUS: [connected(1) | rssiDbm(1) | ip(4) | ssid(<=32, no NUL)]
+// Result encoding for WifiOp.SCAN:   [count(1) | strongestRssi(1) | strongestSsid(<=32, no NUL)]
+// Deliberately not protobuf - these are small enough that a fixed byte layout is cheaper to
+// encode/decode than nesting another message, and the field meanings are documented here and
+// in docs/architecture.md rather than in the wire schema.
+void FieldControlModule::handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_WifiOp &op)
+{
+#if HAS_WIFI
+    using namespace fieldcontrol;
+
+    switch (op.kind) {
+    case meshtastic_WifiOp_Kind_ASSOCIATE: {
+        bool started = WifiControl::associate(op.ssid, op.psk);
+        LOG_INFO("FieldControl: WifiOp ASSOCIATE ssid='%s' started=%d", op.ssid, started);
+        replyWith(mp, requestId, started, started ? NULL : "ssid required");
+        break;
+    }
+    case meshtastic_WifiOp_Kind_DISASSOCIATE: {
+        WifiControl::disassociate();
+        LOG_INFO("FieldControl: WifiOp DISASSOCIATE");
+        replyWith(mp, requestId, true, NULL);
+        break;
+    }
+    case meshtastic_WifiOp_Kind_STATUS: {
+        WifiStatus s = WifiControl::status();
+        uint8_t buf[1 + 1 + 4 + sizeof(s.ssid)];
+        size_t len = 0;
+        buf[len++] = s.connected ? 1 : 0;
+        buf[len++] = (uint8_t)s.rssiDbm;
+        memcpy(&buf[len], s.ip, 4);
+        len += 4;
+        size_t ssidLen = strnlen(s.ssid, sizeof(s.ssid));
+        memcpy(&buf[len], s.ssid, ssidLen);
+        len += ssidLen;
+        LOG_INFO("FieldControl: WifiOp STATUS connected=%d rssi=%d", s.connected, s.rssiDbm);
+        replyWith(mp, requestId, true, NULL, buf, len);
+        break;
+    }
+    case meshtastic_WifiOp_Kind_SCAN: {
+        char strongestSsid[33] = {0};
+        int8_t strongestRssi = 0;
+        int n = WifiControl::scan(strongestSsid, sizeof(strongestSsid), &strongestRssi);
+        uint8_t buf[1 + 1 + sizeof(strongestSsid) - 1];
+        size_t len = 0;
+        buf[len++] = (uint8_t)(n < 0 ? 0 : (n > 255 ? 255 : n));
+        buf[len++] = (uint8_t)strongestRssi;
+        size_t ssidLen = strnlen(strongestSsid, sizeof(strongestSsid));
+        memcpy(&buf[len], strongestSsid, ssidLen);
+        len += ssidLen;
+        LOG_INFO("FieldControl: WifiOp SCAN found=%d", n);
+        replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "scan failed", buf, len);
+        break;
+    }
+    default:
+        replyWith(mp, requestId, false, "unknown wifi op kind");
+        break;
+    }
+#else
+    (void)op;
+    LOG_WARN("FieldControl: WifiOp received but HAS_WIFI is 0 on this build");
+    replyWith(mp, requestId, false, "wifi not supported on this hardware");
+#endif
 }
 
 bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded)
@@ -51,18 +122,9 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
     uint32_t requestId = decoded->request_id;
 
     switch (decoded->which_payload_variant) {
-    case meshtastic_FieldMessage_wifi_tag: {
-        if (decoded->wifi.kind == meshtastic_WifiOp_Kind_STATUS) {
-            // Phase 1: prove the round trip works. Real status reporting arrives in Phase 2
-            // (WifiControl), see docs/architecture.md.
-            LOG_INFO("FieldControl: WifiOp STATUS (Phase 1 stub reply)");
-            replyWith(mp, requestId, true, NULL);
-        } else {
-            LOG_WARN("FieldControl: WifiOp kind %d not implemented until Phase 2", decoded->wifi.kind);
-            replyWith(mp, requestId, false, "wifi op not implemented yet");
-        }
+    case meshtastic_FieldMessage_wifi_tag:
+        handleWifiOp(mp, requestId, decoded->wifi);
         break;
-    }
     case meshtastic_FieldMessage_bt_tag:
         LOG_WARN("FieldControl: BtOp not implemented until Phase 3");
         replyWith(mp, requestId, false, "bt op not implemented yet");
