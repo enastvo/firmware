@@ -3,6 +3,7 @@
 #include "Router.h"
 #include "configuration.h"
 #include "fieldcontrol/BtControl.h"
+#include "fieldcontrol/NetControl.h"
 #include "fieldcontrol/WifiControl.h"
 #include "mesh/Channels.h"
 #include <cstring>
@@ -172,6 +173,65 @@ void FieldControlModule::handleBtOp(const meshtastic_MeshPacket &mp, uint32_t re
 #endif
 }
 
+// Result encoding for NetOp.PING: [sent(1) | received(1) | minMs(2,LE) | avgMs(2,LE) | maxMs(2,LE)]
+// Result encoding for NetOp.SEND: [bytesSent(2,LE)]
+// NetOp.RECV's result is the raw bytes read (up to FieldResult.result's 140-byte capacity),
+// waited for with a fixed 3s timeout - see the WifiOp comment above for why this isn't nested
+// protobuf, and docs/architecture.md for why RECV doesn't take an explicit length/timeout (kept
+// out of scope for this phase; revisit if a real target needs one).
+void FieldControlModule::handleNetOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_NetOp &op)
+{
+#if HAS_WIFI
+    using namespace fieldcontrol;
+
+    switch (op.kind) {
+    case meshtastic_NetOp_Kind_PING: {
+        PingResult r;
+        bool ok = NetControl::ping(op.host, 4, &r);
+        uint8_t buf[8];
+        buf[0] = r.sent;
+        buf[1] = r.received;
+        buf[2] = (uint8_t)(r.minMs & 0xFF);
+        buf[3] = (uint8_t)(r.minMs >> 8);
+        buf[4] = (uint8_t)(r.avgMs & 0xFF);
+        buf[5] = (uint8_t)(r.avgMs >> 8);
+        buf[6] = (uint8_t)(r.maxMs & 0xFF);
+        buf[7] = (uint8_t)(r.maxMs >> 8);
+        LOG_INFO("FieldControl: NetOp PING host='%s' sent=%d recv=%d", op.host, r.sent, r.received);
+        replyWith(mp, requestId, ok, ok ? NULL : "host resolution failed", buf, sizeof(buf));
+        break;
+    }
+    case meshtastic_NetOp_Kind_TCP_CONNECT: {
+        bool ok = NetControl::tcpConnect(op.host, (uint16_t)op.port);
+        LOG_INFO("FieldControl: NetOp TCP_CONNECT host='%s' port=%u ok=%d", op.host, op.port, ok);
+        replyWith(mp, requestId, ok, ok ? NULL : "tcp connect failed");
+        break;
+    }
+    case meshtastic_NetOp_Kind_SEND: {
+        int n = NetControl::tcpSend(op.data.bytes, op.data.size);
+        LOG_INFO("FieldControl: NetOp SEND n=%d", n);
+        uint8_t buf[2] = {(uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF)};
+        replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "not connected", buf, sizeof(buf));
+        break;
+    }
+    case meshtastic_NetOp_Kind_RECV: {
+        uint8_t buf[140];
+        int n = NetControl::tcpRecv(buf, sizeof(buf), 3000);
+        LOG_INFO("FieldControl: NetOp RECV n=%d", n);
+        replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "not connected", n > 0 ? buf : NULL, n > 0 ? (size_t)n : 0);
+        break;
+    }
+    default:
+        replyWith(mp, requestId, false, "unknown net op kind");
+        break;
+    }
+#else
+    (void)op;
+    LOG_WARN("FieldControl: NetOp received but HAS_WIFI is 0 on this build");
+    replyWith(mp, requestId, false, "network ops not supported on this hardware");
+#endif
+}
+
 bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded)
 {
     if (!isAuthorized(mp)) {
@@ -191,8 +251,7 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         handleBtOp(mp, requestId, decoded->bt);
         break;
     case meshtastic_FieldMessage_net_tag:
-        LOG_WARN("FieldControl: NetOp not implemented until Phase 4");
-        replyWith(mp, requestId, false, "net op not implemented yet");
+        handleNetOp(mp, requestId, decoded->net);
         break;
     case meshtastic_FieldMessage_script_tag:
         LOG_WARN("FieldControl: ScriptOp not implemented until Phase 5");

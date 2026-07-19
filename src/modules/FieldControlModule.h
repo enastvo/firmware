@@ -23,8 +23,10 @@
  *
  * Phase 2 adds real WiFi control (WifiControl, see src/fieldcontrol/) for
  * WifiOp SCAN/ASSOCIATE/DISASSOCIATE/STATUS. Phase 3 adds real Bluetooth control
- * (BtControl) for BtOp SCAN/CONNECT/DISCONNECT/GATT_READ/GATT_WRITE. NetOp/ScriptOp
- * are still stubs for later phases.
+ * (BtControl) for BtOp SCAN/CONNECT/DISCONNECT/GATT_READ/GATT_WRITE. Phase 4 adds
+ * real network-layer control (NetControl) for NetOp PING/TCP_CONNECT/SEND/RECV,
+ * usable once WifiOp.ASSOCIATE has joined a network. ScriptOp is still a stub for
+ * a later phase.
  */
 class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
 {
@@ -40,6 +42,7 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
     bool isAuthorized(const meshtastic_MeshPacket &mp);
     void handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_WifiOp &op);
     void handleBtOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_BtOp &op);
+    void handleNetOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_NetOp &op);
 };
 
 extern FieldControlModule *fieldControlModule;
