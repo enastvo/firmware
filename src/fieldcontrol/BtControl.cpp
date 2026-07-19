@@ -50,15 +50,22 @@ bool BtControl::connect(const uint8_t addr[6])
 
     uint8_t addrCopy[6];
     memcpy(addrCopy, addr, 6);
-    NimBLEAddress a(addrCopy, BLE_ADDR_PUBLIC);
 
-    sClient = NimBLEDevice::createClient(a);
-    bool ok = sClient->connect();
-    if (!ok) {
+    // The wire format only carries the 6 raw address bytes, not the BLE address
+    // type (public vs. random static) - most peripherals we actually care about
+    // here (including our own NimbleBluetooth GATT server, see
+    // NimbleBluetooth.cpp) advertise as random static, so try that first and
+    // fall back to public rather than requiring callers to know/plumb the type.
+    for (uint8_t addrType : {BLE_ADDR_RANDOM, BLE_ADDR_PUBLIC}) {
+        NimBLEAddress a(addrCopy, addrType);
+        sClient = NimBLEDevice::createClient(a);
+        if (sClient->connect()) {
+            return true;
+        }
         NimBLEDevice::deleteClient(sClient);
         sClient = nullptr;
     }
-    return ok;
+    return false;
 }
 
 void BtControl::disconnect()

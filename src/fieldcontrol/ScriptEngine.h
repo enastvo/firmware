@@ -40,6 +40,16 @@ struct ScriptRunResult {
  * the port value directly in a register, for scanning a specific list rather than a
  * contiguous range.
  *
+ * BT_GATT_READ/WRITE only move 4 bytes (an i32, packed LE) per call, matching the
+ * output format used everywhere else - fine for typical small sensor/status
+ * characteristics, not a general-purpose arbitrary-length transfer (the direct
+ * BtOp.GATT_READ/WRITE commands have no such limit). Both operate on whatever BLE
+ * connection BT_CONNECT last established - there's no implicit connect, unlike
+ * NET_TCP_CONNECT which dials fresh every call - so a script needs BT_CONNECT first.
+ * BT_CONNECT's address operand is a const, but not a string: it must be exactly 6
+ * raw bytes (a `.const aa:bb:cc:dd:ee:ff` literal in the assembler), since the
+ * const pool is a content-agnostic byte blob, not necessarily printable text.
+ *
  * Phase 6 moves execution into its own FreeRTOS task (see FieldControlModule) so a
  * long-running script can't block the module's packet handling; abortFlag lets that
  * caller request early termination (checked between every instruction, and inside

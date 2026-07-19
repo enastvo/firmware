@@ -22,6 +22,10 @@ constexpr uint8_t OP_WIFI_ASSOC = 0x11;
 constexpr uint8_t OP_WIFI_DISASSOC = 0x12;
 constexpr uint8_t OP_WIFI_SCAN = 0x13;
 constexpr uint8_t OP_BT_SCAN = 0x20;
+constexpr uint8_t OP_BT_GATT_READ = 0x21;
+constexpr uint8_t OP_BT_GATT_WRITE = 0x22;
+constexpr uint8_t OP_BT_CONNECT = 0x23;
+constexpr uint8_t OP_BT_DISCONNECT = 0x24;
 constexpr uint8_t OP_NET_PING = 0x30;
 constexpr uint8_t OP_NET_TCP_CONNECT = 0x31;
 constexpr uint8_t OP_NET_TCP_CLOSE = 0x32;
@@ -244,6 +248,69 @@ class Interpreter
                 int n = BtControl::scan(&best);
                 regs[reg] = n;
                 appendOutput(op, n);
+            } else if (op == OP_BT_GATT_READ) {
+                // serviceUuidConst:u8 charUuidConst:u8 resultReg:u8 - only the first 4
+                // bytes of the characteristic's value are captured (packed LE into the
+                // result register/output), since the output format everywhere else is a
+                // compact int32 - fine for typical small sensor/status characteristics,
+                // not a general-purpose arbitrary-length read (BtOp.GATT_READ, the direct
+                // command, has no such limit if you need the raw bytes back).
+                if (pc + 3 > bufLen || buf[pc + 2] >= NUM_REGS) {
+                    ok = false;
+                    break;
+                }
+                char svcBuf[64], charBuf[64];
+                uint8_t svcC = buf[pc], charC = buf[pc + 1];
+                uint8_t resultReg = buf[pc + 2];
+                pc += 3;
+                uint8_t readBuf[16] = {0};
+                int n = BtControl::gattRead(constCStr(svcC, svcBuf, sizeof(svcBuf)), constCStr(charC, charBuf, sizeof(charBuf)),
+                                            readBuf, sizeof(readBuf));
+                int32_t value = 0;
+                if (n > 0) {
+                    size_t copyLen = (size_t)n < 4 ? (size_t)n : 4;
+                    memcpy(&value, readBuf, copyLen);
+                }
+                regs[resultReg] = value;
+                appendOutput(op, value);
+            } else if (op == OP_BT_GATT_WRITE) {
+                // serviceUuidConst:u8 charUuidConst:u8 valueReg:u8 resultReg:u8 - writes
+                // valueReg's 4 bytes (LE) to the characteristic. Same 4-byte limit as
+                // BT_GATT_READ, for the same reason.
+                if (pc + 4 > bufLen || buf[pc + 2] >= NUM_REGS || buf[pc + 3] >= NUM_REGS) {
+                    ok = false;
+                    break;
+                }
+                char svcBuf[64], charBuf[64];
+                uint8_t svcC = buf[pc], charC = buf[pc + 1];
+                int32_t value = regs[buf[pc + 2]];
+                uint8_t resultReg = buf[pc + 3];
+                pc += 4;
+                bool ok2 = BtControl::gattWrite(constCStr(svcC, svcBuf, sizeof(svcBuf)), constCStr(charC, charBuf, sizeof(charBuf)),
+                                                (const uint8_t *)&value, 4);
+                regs[resultReg] = ok2 ? 1 : 0;
+                appendOutput(op, ok2 ? 1 : 0);
+            } else if (op == OP_BT_CONNECT) {
+                // addrConst:u8 resultReg:u8 - addrConst must be a 6-byte raw-address
+                // const (not a string), see the assembler's `.const aa:bb:cc:dd:ee:ff`
+                // form. GATT_READ/WRITE operate on whatever connection this leaves
+                // active, so a script needs this before them (there's no implicit
+                // connect, unlike NET_TCP_CONNECT which dials fresh every call).
+                if (pc + 2 > bufLen || buf[pc + 1] >= NUM_REGS) {
+                    ok = false;
+                    break;
+                }
+                uint8_t addrC = buf[pc];
+                uint8_t resultReg = buf[pc + 1];
+                pc += 2;
+                bool ok2 = false;
+                if (addrC < numConsts && consts[addrC].len == 6) {
+                    ok2 = BtControl::connect(consts[addrC].data);
+                }
+                regs[resultReg] = ok2 ? 1 : 0;
+                appendOutput(op, ok2 ? 1 : 0);
+            } else if (op == OP_BT_DISCONNECT) {
+                BtControl::disconnect();
             }
 #endif
             else {
