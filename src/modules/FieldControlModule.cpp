@@ -4,6 +4,8 @@
 #include "configuration.h"
 #include "fieldcontrol/BtControl.h"
 #include "fieldcontrol/NetControl.h"
+#include "fieldcontrol/ScriptEngine.h"
+#include "fieldcontrol/ScriptStore.h"
 #include "fieldcontrol/WifiControl.h"
 #include "mesh/Channels.h"
 #include <cstring>
@@ -232,6 +234,74 @@ void FieldControlModule::handleNetOp(const meshtastic_MeshPacket &mp, uint32_t r
 #endif
 }
 
+// Result encoding for ScriptOp.LIST: repeated [nameLen(1) | name(nameLen) | sizeBytes(4,LE)]
+// entries, count-prefixed by a single leading byte. EXECUTE's result is whatever
+// ScriptEngine collected (see ScriptEngine.h's opcode/output format).
+void FieldControlModule::handleScriptOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_ScriptOp &op)
+{
+    using namespace fieldcontrol;
+
+    switch (op.kind) {
+    case meshtastic_ScriptOp_Kind_UPLOAD_CHUNK: {
+        ChunkResult r =
+            ScriptStore::putChunk(op.script_id, op.chunk_index, op.total_chunks, op.chunk_data.bytes, op.chunk_data.size, op.crc32);
+        LOG_INFO("FieldControl: ScriptOp UPLOAD_CHUNK id='%s' %u/%u result=%d", op.script_id, op.chunk_index, op.total_chunks,
+                 (int)r);
+        replyWith(mp, requestId, r != ChunkResult::ERROR, r != ChunkResult::ERROR ? NULL : "chunk upload failed");
+        break;
+    }
+    case meshtastic_ScriptOp_Kind_EXECUTE: {
+        static uint8_t bytecode[ScriptStore::MAX_SCRIPT_SIZE]; // static: too large for the call stack
+        int n = ScriptStore::load(op.script_id, bytecode, sizeof(bytecode));
+        if (n <= 0) {
+            replyWith(mp, requestId, false, "script not found");
+            break;
+        }
+        ScriptRunResult result;
+        ScriptEngine::run(bytecode, (size_t)n, &result);
+        LOG_INFO("FieldControl: ScriptOp EXECUTE id='%s' completed=%d outputLen=%u", op.script_id, result.completed,
+                 (unsigned)result.outputLen);
+        replyWith(mp, requestId, result.completed, result.completed ? NULL : "script hit its step/time budget or was malformed",
+                   result.output, result.outputLen);
+        break;
+    }
+    case meshtastic_ScriptOp_Kind_LIST: {
+        auto scripts = ScriptStore::list();
+        uint8_t buf[140];
+        size_t len = 0;
+        buf[len++] = (uint8_t)(scripts.size() > 255 ? 255 : scripts.size());
+        for (auto &s : scripts) {
+            size_t nameLen = strnlen(s.name, sizeof(s.name));
+            if (len + 1 + nameLen + 4 > sizeof(buf)) {
+                break;
+            }
+            buf[len++] = (uint8_t)nameLen;
+            memcpy(&buf[len], s.name, nameLen);
+            len += nameLen;
+            memcpy(&buf[len], &s.sizeBytes, 4);
+            len += 4;
+        }
+        replyWith(mp, requestId, true, NULL, buf, len);
+        break;
+    }
+    case meshtastic_ScriptOp_Kind_DELETE: {
+        bool ok = ScriptStore::remove(op.script_id);
+        LOG_INFO("FieldControl: ScriptOp DELETE id='%s' ok=%d", op.script_id, ok);
+        replyWith(mp, requestId, ok, ok ? NULL : "delete failed");
+        break;
+    }
+    case meshtastic_ScriptOp_Kind_ABORT:
+        // EXECUTE runs synchronously (see ScriptEngine.h) and will already have
+        // finished by the time an ABORT could arrive - nothing to abort yet.
+        // Real mid-execution abort needs the background task added in Phase 6.
+        replyWith(mp, requestId, false, "no script running (execution is synchronous until Phase 6)");
+        break;
+    default:
+        replyWith(mp, requestId, false, "unknown script op kind");
+        break;
+    }
+}
+
 bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded)
 {
     if (!isAuthorized(mp)) {
@@ -254,8 +324,7 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         handleNetOp(mp, requestId, decoded->net);
         break;
     case meshtastic_FieldMessage_script_tag:
-        LOG_WARN("FieldControl: ScriptOp not implemented until Phase 5");
-        replyWith(mp, requestId, false, "script op not implemented yet");
+        handleScriptOp(mp, requestId, decoded->script);
         break;
     case meshtastic_FieldMessage_response_tag:
         // A response arrived at a node that isn't the interactive client (e.g. a relay) - nothing to do.

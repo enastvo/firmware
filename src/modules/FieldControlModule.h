@@ -25,8 +25,11 @@
  * WifiOp SCAN/ASSOCIATE/DISASSOCIATE/STATUS. Phase 3 adds real Bluetooth control
  * (BtControl) for BtOp SCAN/CONNECT/DISCONNECT/GATT_READ/GATT_WRITE. Phase 4 adds
  * real network-layer control (NetControl) for NetOp PING/TCP_CONNECT/SEND/RECV,
- * usable once WifiOp.ASSOCIATE has joined a network. ScriptOp is still a stub for
- * a later phase.
+ * usable once WifiOp.ASSOCIATE has joined a network. Phase 5 adds script storage
+ * (ScriptStore) and a bytecode interpreter (ScriptEngine) for ScriptOp
+ * UPLOAD_CHUNK/EXECUTE/LIST/DELETE - EXECUTE runs synchronously for now (see
+ * ScriptEngine.h for why), so ABORT isn't meaningful until Phase 6 hardening adds
+ * a background execution task.
  */
 class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
 {
@@ -43,6 +46,7 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
     void handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_WifiOp &op);
     void handleBtOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_BtOp &op);
     void handleNetOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_NetOp &op);
+    void handleScriptOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_ScriptOp &op);
 };
 
 extern FieldControlModule *fieldControlModule;
