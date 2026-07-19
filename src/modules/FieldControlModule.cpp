@@ -492,8 +492,15 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         handleFileOp(mp, requestId, decoded->file);
         break;
     case meshtastic_FieldMessage_response_tag:
-        // A response arrived at a node that isn't the interactive client (e.g. a relay) - nothing to do.
-        break;
+        // We don't act on responses ourselves - the interactive client (our own USB-attached
+        // Controller, or a relay) needs to see this packet. Returning true/STOP here would
+        // break MeshModule::callModules' iteration before RoutingModule (registered last,
+        // see Modules.cpp) gets a turn - and RoutingModule is what actually forwards received
+        // packets to the phone/API (MeshService::handleFromRadio), which is how our own CLI's
+        // pubsub-based response matching (FieldClient._on_receive in tools/lophi.py) sees a
+        // reply arrive back at the Controller. Returning false/CONTINUE here was a real bug:
+        // every response was silently swallowed before ever reaching the phone/API layer.
+        return false;
     default:
         LOG_WARN("FieldControl: unknown payload_variant %d", decoded->which_payload_variant);
         break;
