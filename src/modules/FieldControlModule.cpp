@@ -344,6 +344,52 @@ void FieldControlModule::handleScriptOp(const meshtastic_MeshPacket &mp, uint32_
     }
 }
 
+// Result encoding for FileOp.LIST: identical layout to ScriptOp.LIST above.
+// Files are opaque bytes - no EXECUTE/ABORT here, just UPLOAD_CHUNK/LIST/DELETE.
+void FieldControlModule::handleFileOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_FileOp &op)
+{
+    using namespace fieldcontrol;
+
+    switch (op.kind) {
+    case meshtastic_FileOp_Kind_UPLOAD_CHUNK: {
+        ChunkResult r =
+            FileStore::putChunk(op.file_id, op.chunk_index, op.total_chunks, op.chunk_data.bytes, op.chunk_data.size, op.crc32);
+        LOG_INFO("FieldControl: FileOp UPLOAD_CHUNK id='%s' %u/%u result=%d", op.file_id, op.chunk_index, op.total_chunks,
+                 (int)r);
+        replyWith(mp, requestId, r != ChunkResult::ERROR, r != ChunkResult::ERROR ? NULL : "chunk upload failed");
+        break;
+    }
+    case meshtastic_FileOp_Kind_LIST: {
+        auto files = FileStore::list();
+        uint8_t buf[140];
+        size_t len = 0;
+        buf[len++] = (uint8_t)(files.size() > 255 ? 255 : files.size());
+        for (auto &f : files) {
+            size_t nameLen = strnlen(f.name, sizeof(f.name));
+            if (len + 1 + nameLen + 4 > sizeof(buf)) {
+                break;
+            }
+            buf[len++] = (uint8_t)nameLen;
+            memcpy(&buf[len], f.name, nameLen);
+            len += nameLen;
+            memcpy(&buf[len], &f.sizeBytes, 4);
+            len += 4;
+        }
+        replyWith(mp, requestId, true, NULL, buf, len);
+        break;
+    }
+    case meshtastic_FileOp_Kind_DELETE: {
+        bool ok = FileStore::remove(op.file_id);
+        LOG_INFO("FieldControl: FileOp DELETE id='%s' ok=%d", op.file_id, ok);
+        replyWith(mp, requestId, ok, ok ? NULL : "delete failed");
+        break;
+    }
+    default:
+        replyWith(mp, requestId, false, "unknown file op kind");
+        break;
+    }
+}
+
 // Entry point handed to xTaskCreate; just forwards to the instance method and cleans
 // itself up. Follows the same pattern as AudioModule's run_codec2/codec2HandlerTask.
 void FieldControlModule::scriptTaskEntry(void *param)
@@ -437,6 +483,9 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         break;
     case meshtastic_FieldMessage_script_tag:
         handleScriptOp(mp, requestId, decoded->script);
+        break;
+    case meshtastic_FieldMessage_file_tag:
+        handleFileOp(mp, requestId, decoded->file);
         break;
     case meshtastic_FieldMessage_response_tag:
         // A response arrived at a node that isn't the interactive client (e.g. a relay) - nothing to do.

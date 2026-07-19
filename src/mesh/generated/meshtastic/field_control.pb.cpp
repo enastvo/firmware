@@ -18,10 +18,15 @@ PB_BIND(meshtastic_NetOp, meshtastic_NetOp, AUTO)
 PB_BIND(meshtastic_ScriptOp, meshtastic_ScriptOp, AUTO)
 
 
+PB_BIND(meshtastic_FileOp, meshtastic_FileOp, AUTO)
+
+
 PB_BIND(meshtastic_FieldResult, meshtastic_FieldResult, AUTO)
 
 
 PB_BIND(meshtastic_FieldMessage, meshtastic_FieldMessage, AUTO)
+
+
 
 
 

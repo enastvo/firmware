@@ -1,4 +1,4 @@
-#include "fieldcontrol/ScriptStore.h"
+#include "fieldcontrol/ChunkedStore.h"
 #include "FSCommon.h"
 #include "SPILock.h"
 #include <ErriezCRC32.h>
@@ -8,49 +8,41 @@
 namespace fieldcontrol
 {
 
-namespace
+void ChunkedStore::blobPath(const char *id, char *out, size_t outLen)
 {
-char sUploadId[17] = {0};
-uint32_t sExpectedChunk = 0;
-uint32_t sTotalChunks = 0;
-size_t sUploadedBytes = 0;
-
-void scriptPath(const char *id, char *out, size_t outLen)
-{
-    snprintf(out, outLen, "/scripts/%s", id);
+    snprintf(out, outLen, "%s/%s", root, id);
 }
 
-void scriptTmpPath(const char *id, char *out, size_t outLen)
+void ChunkedStore::blobTmpPath(const char *id, char *out, size_t outLen)
 {
-    snprintf(out, outLen, "/scripts/.%s.tmp", id);
+    snprintf(out, outLen, "%s/.%s.tmp", root, id);
 }
-} // namespace
 
-ChunkResult ScriptStore::putChunk(const char *scriptId, uint32_t chunkIndex, uint32_t totalChunks, const uint8_t *data,
-                                   size_t len, uint32_t crc32OnFinal)
+ChunkResult ChunkedStore::putChunk(const char *id, uint32_t chunkIndex, uint32_t totalChunks, const uint8_t *data, size_t len,
+                                   uint32_t crc32OnFinal)
 {
-    if (!scriptId || !scriptId[0] || totalChunks == 0 || chunkIndex >= totalChunks) {
+    if (!id || !id[0] || totalChunks == 0 || chunkIndex >= totalChunks) {
         return ChunkResult::ERROR;
     }
 
     char tmpPath[48];
-    scriptTmpPath(scriptId, tmpPath, sizeof(tmpPath));
+    blobTmpPath(id, tmpPath, sizeof(tmpPath));
 
     spiLock->lock();
-    FSCom.mkdir("/scripts");
+    FSCom.mkdir(root);
 
     if (chunkIndex == 0) {
         // (Re)start a fresh upload, abandoning any previous incomplete one.
-        strncpy(sUploadId, scriptId, sizeof(sUploadId) - 1);
-        sUploadId[sizeof(sUploadId) - 1] = '\0';
-        sExpectedChunk = 0;
-        sTotalChunks = totalChunks;
-        sUploadedBytes = 0;
+        strncpy(uploadId, id, sizeof(uploadId) - 1);
+        uploadId[sizeof(uploadId) - 1] = '\0';
+        expectedChunk = 0;
+        totalChunksExpected = totalChunks;
+        uploadedBytes = 0;
         FSCom.remove(tmpPath);
     }
 
-    if (strncmp(sUploadId, scriptId, sizeof(sUploadId)) != 0 || chunkIndex != sExpectedChunk || sTotalChunks != totalChunks ||
-        sUploadedBytes + len > ScriptStore::MAX_SCRIPT_SIZE) {
+    if (strncmp(uploadId, id, sizeof(uploadId)) != 0 || chunkIndex != expectedChunk || totalChunksExpected != totalChunks ||
+        uploadedBytes + len > MAX_BLOB_SIZE) {
         spiLock->unlock();
         return ChunkResult::ERROR;
     }
@@ -67,8 +59,8 @@ ChunkResult ScriptStore::putChunk(const char *scriptId, uint32_t chunkIndex, uin
         spiLock->unlock();
         return ChunkResult::ERROR;
     }
-    sUploadedBytes += len;
-    sExpectedChunk++;
+    uploadedBytes += len;
+    expectedChunk++;
 
     bool isFinal = (chunkIndex + 1 == totalChunks);
     if (!isFinal) {
@@ -76,7 +68,7 @@ ChunkResult ScriptStore::putChunk(const char *scriptId, uint32_t chunkIndex, uin
         return ChunkResult::OK;
     }
 
-    // Final chunk: verify CRC32 of the whole reassembled blob before making it executable.
+    // Final chunk: verify CRC32 of the whole reassembled blob before making it visible.
     File rf = FSCom.open(tmpPath, FILE_O_READ);
     if (!rf) {
         spiLock->unlock();
@@ -95,8 +87,8 @@ ChunkResult ScriptStore::putChunk(const char *scriptId, uint32_t chunkIndex, uin
     }
 
     char finalPath[48];
-    scriptPath(scriptId, finalPath, sizeof(finalPath));
-    FSCom.remove(finalPath); // clear any previous version of this script
+    blobPath(id, finalPath, sizeof(finalPath));
+    FSCom.remove(finalPath); // clear any previous version
     spiLock->unlock();
 
     // renameFile takes the SPI lock itself - must not be called while we hold it.
@@ -104,10 +96,10 @@ ChunkResult ScriptStore::putChunk(const char *scriptId, uint32_t chunkIndex, uin
     return ChunkResult::COMPLETE;
 }
 
-int ScriptStore::load(const char *scriptId, uint8_t *buf, size_t bufLen)
+int ChunkedStore::load(const char *id, uint8_t *buf, size_t bufLen)
 {
     char path[48];
-    scriptPath(scriptId, path, sizeof(path));
+    blobPath(id, path, sizeof(path));
 
     spiLock->lock();
     File f = FSCom.open(path, FILE_O_READ);
@@ -121,10 +113,10 @@ int ScriptStore::load(const char *scriptId, uint8_t *buf, size_t bufLen)
     return (int)n;
 }
 
-bool ScriptStore::remove(const char *scriptId)
+bool ChunkedStore::remove(const char *id)
 {
     char path[48];
-    scriptPath(scriptId, path, sizeof(path));
+    blobPath(id, path, sizeof(path));
 
     spiLock->lock();
     bool ok = FSCom.remove(path);
@@ -132,13 +124,13 @@ bool ScriptStore::remove(const char *scriptId)
     return ok;
 }
 
-std::vector<ScriptInfo> ScriptStore::list(size_t maxCount)
+std::vector<BlobInfo> ChunkedStore::list(size_t maxCount)
 {
-    std::vector<ScriptInfo> out;
+    std::vector<BlobInfo> out;
 
     spiLock->lock();
-    FSCom.mkdir("/scripts");
-    auto files = getFiles("/scripts", 1, maxCount); // getFiles requires the caller to hold spiLock
+    FSCom.mkdir(root);
+    auto files = getFiles(root, 1, maxCount); // getFiles requires the caller to hold spiLock
     spiLock->unlock();
 
     for (auto &f : files) {
@@ -147,7 +139,7 @@ std::vector<ScriptInfo> ScriptStore::list(size_t maxCount)
         if (base[0] == '.') {
             continue; // skip in-progress .tmp uploads
         }
-        ScriptInfo info{};
+        BlobInfo info{};
         strncpy(info.name, base, sizeof(info.name) - 1);
         info.sizeBytes = f.size_bytes;
         out.push_back(info);

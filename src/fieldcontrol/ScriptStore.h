@@ -1,5 +1,6 @@
 #pragma once
 #include "configuration.h"
+#include "fieldcontrol/ChunkedStore.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,39 +9,36 @@
 namespace fieldcontrol
 {
 
-enum class ChunkResult { OK, COMPLETE, ERROR };
-
-struct ScriptInfo {
-    char name[32];
-    uint32_t sizeBytes;
-};
+using ScriptInfo = BlobInfo;
 
 /**
- * LittleFS-backed storage for uploaded scripts (see docs/architecture.md, Phase 5).
- * Only one upload can be in progress at a time - starting a new one (chunkIndex==0
- * for a different scriptId) abandons any prior incomplete upload.
+ * Thin static facade over ChunkedStore("/scripts") - see ChunkedStore.h for the
+ * actual implementation (shared with FileStore). Kept as its own class so call
+ * sites in FieldControlModule read as ScriptStore::putChunk(...) etc.
  */
 class ScriptStore
 {
   public:
-    static constexpr size_t MAX_SCRIPT_SIZE = 4096;
+    static constexpr size_t MAX_SCRIPT_SIZE = ChunkedStore::MAX_BLOB_SIZE;
 
-    /**
-     * Handles one ScriptOp.UPLOAD_CHUNK. Returns OK if more chunks are expected,
-     * COMPLETE if this was the final chunk and crc32OnFinal matched the
-     * reassembled blob (the script is now stored under scriptId and executable),
-     * ERROR on an out-of-order chunk, CRC mismatch, oversized script, or IO error.
-     */
     static ChunkResult putChunk(const char *scriptId, uint32_t chunkIndex, uint32_t totalChunks, const uint8_t *data,
-                                size_t len, uint32_t crc32OnFinal);
+                                size_t len, uint32_t crc32OnFinal)
+    {
+        return store().putChunk(scriptId, chunkIndex, totalChunks, data, len, crc32OnFinal);
+    }
 
-    /// Loads a fully-uploaded script into buf. Returns bytes loaded, or negative on failure.
-    static int load(const char *scriptId, uint8_t *buf, size_t bufLen);
+    static int load(const char *scriptId, uint8_t *buf, size_t bufLen) { return store().load(scriptId, buf, bufLen); }
 
-    static bool remove(const char *scriptId);
+    static bool remove(const char *scriptId) { return store().remove(scriptId); }
 
-    /// Lists stored scripts (name + size), up to maxCount.
-    static std::vector<ScriptInfo> list(size_t maxCount = 16);
+    static std::vector<ScriptInfo> list(size_t maxCount = 16) { return store().list(maxCount); }
+
+  private:
+    static ChunkedStore &store()
+    {
+        static ChunkedStore s("/scripts");
+        return s;
+    }
 };
 
 } // namespace fieldcontrol

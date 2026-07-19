@@ -49,6 +49,19 @@ void onPingEnd(esp_ping_handle_t hdl, void *args)
     (void)hdl;
     ((PingCtx *)args)->done = true;
 }
+// esp_ping/WiFi.hostByName/WiFiClient all depend on lwIP's TCP/IP task already being
+// up, which only happens once WiFi.mode() has been called at least once. If a script
+// or command calls a NetOp before any WifiOp.ASSOCIATE this boot, lwIP's internal
+// mbox isn't initialized yet and the call asserts, crashing/rebooting the whole
+// device (found via testing, not a synthetic worry) - so every NetControl entry
+// point that touches lwIP calls this first. It only brings the WiFi stack up
+// (starts the underlying task); it does not attempt to join any network.
+void ensureWifiStackReady()
+{
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+        WiFi.mode(WIFI_STA);
+    }
+}
 } // namespace
 
 bool NetControl::ping(const char *host, uint8_t count, PingResult *result)
@@ -57,6 +70,7 @@ bool NetControl::ping(const char *host, uint8_t count, PingResult *result)
     if (!host || !host[0] || count == 0) {
         return false;
     }
+    ensureWifiStackReady();
 
     IPAddress ip;
     if (!WiFi.hostByName(host, ip)) {
@@ -105,6 +119,7 @@ bool NetControl::ping(const char *host, uint8_t count, PingResult *result)
 
 bool NetControl::tcpConnect(const char *host, uint16_t port)
 {
+    ensureWifiStackReady();
     if (sClient.connected()) {
         sClient.stop();
     }

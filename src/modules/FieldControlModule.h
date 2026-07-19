@@ -1,6 +1,7 @@
 #pragma once
 #include "ProtobufModule.h"
 #include "concurrency/OSThread.h"
+#include "fieldcontrol/FileStore.h"
 #include "fieldcontrol/ScriptEngine.h"
 #include "fieldcontrol/ScriptStore.h"
 #include "freertosinc.h"
@@ -32,7 +33,10 @@
  * real network-layer control (NetControl) for NetOp PING/TCP_CONNECT/SEND/RECV,
  * usable once WifiOp.ASSOCIATE has joined a network. Phase 5 adds script storage
  * (ScriptStore) and a bytecode interpreter (ScriptEngine) for ScriptOp
- * UPLOAD_CHUNK/EXECUTE/LIST/DELETE.
+ * UPLOAD_CHUNK/EXECUTE/LIST/DELETE. Added alongside the unified CLI: FileOp
+ * UPLOAD_CHUNK/LIST/DELETE for generic file uploads (FileStore, no EXECUTE - files
+ * are opaque bytes, not bytecode), sharing ChunkedStore's implementation with
+ * ScriptStore but a separate "/files" root and independent upload-progress state.
  *
  * Phase 6 hardening:
  *  - EXECUTE now runs in its own FreeRTOS task instead of blocking this module's
@@ -76,6 +80,7 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>, priva
     void handleBtOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_BtOp &op);
     void handleNetOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_NetOp &op);
     void handleScriptOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_ScriptOp &op);
+    void handleFileOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_FileOp &op);
 
     static void scriptTaskEntry(void *param);
     void runScriptTask();

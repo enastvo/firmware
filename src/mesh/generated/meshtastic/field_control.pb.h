@@ -40,6 +40,12 @@ typedef enum _meshtastic_ScriptOp_Kind {
     meshtastic_ScriptOp_Kind_ABORT = 4
 } meshtastic_ScriptOp_Kind;
 
+typedef enum _meshtastic_FileOp_Kind {
+    meshtastic_FileOp_Kind_UPLOAD_CHUNK = 0,
+    meshtastic_FileOp_Kind_LIST = 1,
+    meshtastic_FileOp_Kind_DELETE = 2
+} meshtastic_FileOp_Kind;
+
 /* Struct definitions */
 typedef struct _meshtastic_WifiOp {
     meshtastic_WifiOp_Kind kind;
@@ -79,6 +85,16 @@ typedef struct _meshtastic_ScriptOp {
     uint32_t crc32;
 } meshtastic_ScriptOp;
 
+typedef PB_BYTES_ARRAY_T(160) meshtastic_FileOp_chunk_data_t;
+typedef struct _meshtastic_FileOp {
+    meshtastic_FileOp_Kind kind;
+    char file_id[16];
+    uint32_t chunk_index;
+    uint32_t total_chunks;
+    meshtastic_FileOp_chunk_data_t chunk_data;
+    uint32_t crc32;
+} meshtastic_FileOp;
+
 typedef PB_BYTES_ARRAY_T(140) meshtastic_FieldResult_result_t;
 typedef struct _meshtastic_FieldResult {
     bool success;
@@ -95,6 +111,7 @@ typedef struct _meshtastic_FieldMessage {
         meshtastic_NetOp net;
         meshtastic_ScriptOp script;
         meshtastic_FieldResult response;
+        meshtastic_FileOp file;
     };
 } meshtastic_FieldMessage;
 
@@ -120,6 +137,10 @@ extern "C" {
 #define _meshtastic_ScriptOp_Kind_MAX meshtastic_ScriptOp_Kind_ABORT
 #define _meshtastic_ScriptOp_Kind_ARRAYSIZE ((meshtastic_ScriptOp_Kind)(meshtastic_ScriptOp_Kind_ABORT+1))
 
+#define _meshtastic_FileOp_Kind_MIN meshtastic_FileOp_Kind_UPLOAD_CHUNK
+#define _meshtastic_FileOp_Kind_MAX meshtastic_FileOp_Kind_DELETE
+#define _meshtastic_FileOp_Kind_ARRAYSIZE ((meshtastic_FileOp_Kind)(meshtastic_FileOp_Kind_DELETE+1))
+
 #define meshtastic_WifiOp_kind_ENUMTYPE meshtastic_WifiOp_Kind
 
 #define meshtastic_BtOp_kind_ENUMTYPE meshtastic_BtOp_Kind
@@ -127,6 +148,8 @@ extern "C" {
 #define meshtastic_NetOp_kind_ENUMTYPE meshtastic_NetOp_Kind
 
 #define meshtastic_ScriptOp_kind_ENUMTYPE meshtastic_ScriptOp_Kind
+
+#define meshtastic_FileOp_kind_ENUMTYPE meshtastic_FileOp_Kind
 
 
 
@@ -136,12 +159,14 @@ extern "C" {
 #define meshtastic_BtOp_init_default             {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
 #define meshtastic_NetOp_init_default            {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}, 0, 0}
 #define meshtastic_ScriptOp_init_default         {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
+#define meshtastic_FileOp_init_default           {_meshtastic_FileOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_default      {0, "", {0, {0}}}
 #define meshtastic_FieldMessage_init_default     {0, 0, {meshtastic_WifiOp_init_default}}
 #define meshtastic_WifiOp_init_zero              {_meshtastic_WifiOp_Kind_MIN, "", ""}
 #define meshtastic_BtOp_init_zero                {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
 #define meshtastic_NetOp_init_zero               {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}, 0, 0}
 #define meshtastic_ScriptOp_init_zero            {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
+#define meshtastic_FileOp_init_zero              {_meshtastic_FileOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_zero         {0, "", {0, {0}}}
 #define meshtastic_FieldMessage_init_zero        {0, 0, {meshtastic_WifiOp_init_zero}}
 
@@ -166,6 +191,12 @@ extern "C" {
 #define meshtastic_ScriptOp_total_chunks_tag     4
 #define meshtastic_ScriptOp_chunk_data_tag       5
 #define meshtastic_ScriptOp_crc32_tag            6
+#define meshtastic_FileOp_kind_tag               1
+#define meshtastic_FileOp_file_id_tag            2
+#define meshtastic_FileOp_chunk_index_tag        3
+#define meshtastic_FileOp_total_chunks_tag       4
+#define meshtastic_FileOp_chunk_data_tag         5
+#define meshtastic_FileOp_crc32_tag              6
 #define meshtastic_FieldResult_success_tag       1
 #define meshtastic_FieldResult_error_tag         2
 #define meshtastic_FieldResult_result_tag        3
@@ -175,6 +206,7 @@ extern "C" {
 #define meshtastic_FieldMessage_net_tag          4
 #define meshtastic_FieldMessage_script_tag       5
 #define meshtastic_FieldMessage_response_tag     6
+#define meshtastic_FieldMessage_file_tag         7
 
 /* Struct field encoding specification for nanopb */
 #define meshtastic_WifiOp_FIELDLIST(X, a) \
@@ -213,6 +245,16 @@ X(a, STATIC,   SINGULAR, UINT32,   crc32,             6)
 #define meshtastic_ScriptOp_CALLBACK NULL
 #define meshtastic_ScriptOp_DEFAULT NULL
 
+#define meshtastic_FileOp_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UENUM,    kind,              1) \
+X(a, STATIC,   SINGULAR, STRING,   file_id,           2) \
+X(a, STATIC,   SINGULAR, UINT32,   chunk_index,       3) \
+X(a, STATIC,   SINGULAR, UINT32,   total_chunks,      4) \
+X(a, STATIC,   SINGULAR, BYTES,    chunk_data,        5) \
+X(a, STATIC,   SINGULAR, UINT32,   crc32,             6)
+#define meshtastic_FileOp_CALLBACK NULL
+#define meshtastic_FileOp_DEFAULT NULL
+
 #define meshtastic_FieldResult_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, BOOL,     success,           1) \
 X(a, STATIC,   SINGULAR, STRING,   error,             2) \
@@ -226,7 +268,8 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,wifi,wifi),   2) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,bt,bt),   3) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,net,net),   4) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,script,script),   5) \
-X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,response,response),   6)
+X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,response,response),   6) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,file,file),   7)
 #define meshtastic_FieldMessage_CALLBACK NULL
 #define meshtastic_FieldMessage_DEFAULT NULL
 #define meshtastic_FieldMessage_payload_variant_wifi_MSGTYPE meshtastic_WifiOp
@@ -234,11 +277,13 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (payload_variant,response,response),   6)
 #define meshtastic_FieldMessage_payload_variant_net_MSGTYPE meshtastic_NetOp
 #define meshtastic_FieldMessage_payload_variant_script_MSGTYPE meshtastic_ScriptOp
 #define meshtastic_FieldMessage_payload_variant_response_MSGTYPE meshtastic_FieldResult
+#define meshtastic_FieldMessage_payload_variant_file_MSGTYPE meshtastic_FileOp
 
 extern const pb_msgdesc_t meshtastic_WifiOp_msg;
 extern const pb_msgdesc_t meshtastic_BtOp_msg;
 extern const pb_msgdesc_t meshtastic_NetOp_msg;
 extern const pb_msgdesc_t meshtastic_ScriptOp_msg;
+extern const pb_msgdesc_t meshtastic_FileOp_msg;
 extern const pb_msgdesc_t meshtastic_FieldResult_msg;
 extern const pb_msgdesc_t meshtastic_FieldMessage_msg;
 
@@ -247,6 +292,7 @@ extern const pb_msgdesc_t meshtastic_FieldMessage_msg;
 #define meshtastic_BtOp_fields &meshtastic_BtOp_msg
 #define meshtastic_NetOp_fields &meshtastic_NetOp_msg
 #define meshtastic_ScriptOp_fields &meshtastic_ScriptOp_msg
+#define meshtastic_FileOp_fields &meshtastic_FileOp_msg
 #define meshtastic_FieldResult_fields &meshtastic_FieldResult_msg
 #define meshtastic_FieldMessage_fields &meshtastic_FieldMessage_msg
 
@@ -255,6 +301,7 @@ extern const pb_msgdesc_t meshtastic_FieldMessage_msg;
 #define meshtastic_BtOp_size                     152
 #define meshtastic_FieldMessage_size             209
 #define meshtastic_FieldResult_size              178
+#define meshtastic_FileOp_size                   200
 #define meshtastic_NetOp_size                    151
 #define meshtastic_ScriptOp_size                 200
 #define meshtastic_WifiOp_size                   101
