@@ -27,10 +27,18 @@ struct ScriptRunResult {
  *
  * 4 general i32 registers. "Reporting" opcodes (WIFI_STATUS/WIFI_SCAN/BT_SCAN/NET_PING)
  * each append a compact [opcode(1) | value(4,i32)] record to the output buffer, which
- * becomes the ScriptOp.EXECUTE response's result bytes. NET_TCP_CONNECT only reports
- * when the connection succeeds (the port number as the value) - unlike the others it
- * doesn't report every call, so a port-scan loop's output stays proportional to how
- * many ports were actually open, not how many were probed.
+ * becomes the ScriptOp.EXECUTE response's result bytes. NET_TCP_CONNECT/
+ * NET_TCP_CONNECT_INDEXED only report when the connection succeeds (the port number as
+ * the value) - unlike the others they don't report every call, so a port-scan loop's
+ * output stays proportional to how many ports were actually open, not how many were
+ * probed.
+ *
+ * PORT_TABLE is a special "data, not logic" instruction: it embeds a list of u16 ports
+ * directly in the instruction stream (not the 255-byte-limited string constant pool,
+ * which can't hold e.g. a 1000-port table) and records where it is; NET_TCP_CONNECT_
+ * INDEXED then reads a port from that table by register-held index rather than holding
+ * the port value directly in a register, for scanning a specific list rather than a
+ * contiguous range.
  *
  * Phase 6 moves execution into its own FreeRTOS task (see FieldControlModule) so a
  * long-running script can't block the module's packet handling; abortFlag lets that

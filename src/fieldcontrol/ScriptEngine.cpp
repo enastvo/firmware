@@ -25,13 +25,17 @@ constexpr uint8_t OP_BT_SCAN = 0x20;
 constexpr uint8_t OP_NET_PING = 0x30;
 constexpr uint8_t OP_NET_TCP_CONNECT = 0x31;
 constexpr uint8_t OP_NET_TCP_CLOSE = 0x32;
+constexpr uint8_t OP_NET_TCP_CONNECT_INDEXED = 0x33;
+constexpr uint8_t OP_PORT_TABLE = 0x40;
 
-constexpr uint32_t MAX_INSTRUCTIONS = 1000;
-// Was 20000ms; raised now that EXECUTE runs in its own background task (Phase 6) -
-// a longer-running script no longer blocks the module's own packet handling, so the
-// cost of a bigger budget is much lower. Sized to comfortably fit a port-scan loop
-// (e.g. ~80 ports * up to 300ms each for filtered/dropped ports = ~24s worst case).
-constexpr uint32_t MAX_WALLCLOCK_MS = 60000;
+// Both raised to fit a full common-ports scan (~1000 ports): each loop iteration is
+// ~5 instructions (NET_TCP_CONNECT_INDEXED, NET_TCP_CLOSE, 2x ADD, JNZ), so 1000
+// ports needs ~5000 instructions; wall-clock is bounded by real TCP connect timeouts
+// (1000 ports at up to a few hundred ms each for filtered/dropped ports can run several
+// minutes). Safe now that EXECUTE runs in its own background task (Phase 6) - a
+// longer-running script no longer blocks the module's own packet handling.
+constexpr uint32_t MAX_INSTRUCTIONS = 10000;
+constexpr uint32_t MAX_WALLCLOCK_MS = 300000;
 constexpr size_t MAX_CONSTS = 16;
 constexpr size_t NUM_REGS = 4;
 
@@ -181,6 +185,52 @@ class Interpreter
                 }
             } else if (op == OP_NET_TCP_CLOSE) {
                 NetControl::tcpClose();
+            } else if (op == OP_PORT_TABLE) {
+                // count:u16 followed by count * u16(LE) port values, embedded directly in
+                // the instruction stream (not the 255-byte-limited string constant pool,
+                // which can't hold e.g. a 1000-port table). Not "executed" beyond recording
+                // where the table is and skipping past it - see NET_TCP_CONNECT_INDEXED.
+                if (pc + 2 > bufLen) {
+                    ok = false;
+                    break;
+                }
+                uint16_t count = readU16(pc);
+                size_t tableBytes = (size_t)count * 2;
+                if (pc + 2 + tableBytes > bufLen) {
+                    ok = false;
+                    break;
+                }
+                portTable = &buf[pc + 2];
+                portTableCount = count;
+                pc += 2 + tableBytes;
+            } else if (op == OP_NET_TCP_CONNECT_INDEXED) {
+                // hostConst:u8 indexReg:u8 timeoutMs:u16 resultReg:u8 - port is read from
+                // the most recently declared OP_PORT_TABLE at position regs[indexReg],
+                // for scanning a specific list of ports (not a contiguous range, which
+                // NET_TCP_CONNECT's direct register value already covers). Reports the
+                // real port number (not the index) on success, same convention as
+                // NET_TCP_CONNECT.
+                if (pc + 5 > bufLen || buf[pc + 1] >= NUM_REGS || buf[pc + 4] >= NUM_REGS) {
+                    ok = false;
+                    break;
+                }
+                char hostBuf[64];
+                uint8_t hostC = buf[pc];
+                int32_t index = regs[buf[pc + 1]];
+                uint16_t timeoutMs = readU16(pc + 2);
+                uint8_t resultReg = buf[pc + 4];
+                pc += 5;
+                if (!portTable || index < 0 || (uint32_t)index >= portTableCount) {
+                    regs[resultReg] = 0;
+                } else {
+                    uint16_t port;
+                    memcpy(&port, &portTable[(size_t)index * 2], 2);
+                    bool connected = NetControl::tcpConnect(constCStr(hostC, hostBuf, sizeof(hostBuf)), port, timeoutMs);
+                    regs[resultReg] = connected ? 1 : 0;
+                    if (connected) {
+                        appendOutput(op, port);
+                    }
+                }
             }
 #endif
 #if HAS_BLUETOOTH
@@ -297,6 +347,8 @@ class Interpreter
     int32_t regs[NUM_REGS] = {0, 0, 0, 0};
     uint8_t outBuf[100];
     size_t outLen = 0;
+    const uint8_t *portTable = nullptr;
+    uint16_t portTableCount = 0;
 };
 
 } // namespace
