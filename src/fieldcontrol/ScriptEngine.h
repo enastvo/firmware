@@ -8,8 +8,9 @@ namespace fieldcontrol
 {
 
 struct ScriptRunResult {
-    bool completed; // true if HALT was reached; false if the step/wall-clock budget was hit
-                     // or a malformed instruction was found
+    bool completed; // true if HALT was reached; false if the step/wall-clock budget was hit,
+                     // a malformed instruction was found, or the script was aborted
+    bool aborted;    // true specifically if *abortFlag was set mid-run (see run())
     uint8_t output[140];
     size_t outputLen;
 };
@@ -28,16 +29,17 @@ struct ScriptRunResult {
  * each append a compact [opcode(1) | value(4,i32)] record to the output buffer, which
  * becomes the ScriptOp.EXECUTE response's result bytes.
  *
- * Runs synchronously within the calling context (FieldControlModule, on the main
- * packet-handling path) with a hard instruction-count + wall-clock budget as a basic
- * safety net. A real background FreeRTOS task with mid-execution ScriptOp.ABORT
- * support is deferred to Phase 6 hardening rather than built here, since Phase 5's
- * goal is a working interpreter, not the full async/watchdog design.
+ * Phase 6 moves execution into its own FreeRTOS task (see FieldControlModule) so a
+ * long-running script can't block the module's packet handling; abortFlag lets that
+ * caller request early termination (checked between every instruction, and inside
+ * DELAY's wait loop so a long delay doesn't make abort unresponsive). Still has a
+ * hard instruction-count + wall-clock budget as a backstop even without an abort
+ * request.
  */
 class ScriptEngine
 {
   public:
-    static void run(const uint8_t *bytecode, size_t len, ScriptRunResult *result);
+    static void run(const uint8_t *bytecode, size_t len, ScriptRunResult *result, volatile bool *abortFlag = nullptr);
 };
 
 } // namespace fieldcontrol

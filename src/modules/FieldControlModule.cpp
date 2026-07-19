@@ -11,9 +11,11 @@
 #include <cstring>
 
 FieldControlModule *fieldControlModule;
+uint8_t FieldControlModule::scriptBytecode[fieldcontrol::ScriptStore::MAX_SCRIPT_SIZE];
 
 FieldControlModule::FieldControlModule()
-    : ProtobufModule("fieldcontrol", meshtastic_PortNum_PRIVATE_APP, &meshtastic_FieldMessage_msg)
+    : ProtobufModule("fieldcontrol", meshtastic_PortNum_PRIVATE_APP, &meshtastic_FieldMessage_msg),
+      concurrency::OSThread("FieldControl", 500)
 {
     // Deliberately NOT setting boundChannel here - see the class comment in
     // FieldControlModule.h for why PKI-encrypted unicast traffic needs its own check
@@ -27,6 +29,22 @@ bool FieldControlModule::isAuthorized(const meshtastic_MeshPacket &mp)
     }
     meshtastic_Channel &ch = channels.getByIndex(mp.channel);
     return strcasecmp(ch.settings.name, "fieldctrl") == 0;
+}
+
+bool FieldControlModule::isReplay(uint32_t fromNode, uint32_t requestId)
+{
+    for (auto &r : seenRequests) {
+        if (r.valid && r.fromNode == fromNode && r.requestId == requestId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void FieldControlModule::rememberRequest(uint32_t fromNode, uint32_t requestId)
+{
+    seenRequests[seenRequestsNext] = {fromNode, requestId, true};
+    seenRequestsNext = (seenRequestsNext + 1) % SEEN_WINDOW;
 }
 
 void FieldControlModule::replyWith(const meshtastic_MeshPacket &req, uint32_t requestId, bool success, const char *error,
@@ -251,18 +269,30 @@ void FieldControlModule::handleScriptOp(const meshtastic_MeshPacket &mp, uint32_
         break;
     }
     case meshtastic_ScriptOp_Kind_EXECUTE: {
-        static uint8_t bytecode[ScriptStore::MAX_SCRIPT_SIZE]; // static: too large for the call stack
-        int n = ScriptStore::load(op.script_id, bytecode, sizeof(bytecode));
+        if (scriptTaskHandle != nullptr) {
+            replyWith(mp, requestId, false, "a script is already running");
+            break;
+        }
+        int n = ScriptStore::load(op.script_id, scriptBytecode, sizeof(scriptBytecode));
         if (n <= 0) {
             replyWith(mp, requestId, false, "script not found");
             break;
         }
-        ScriptRunResult result;
-        ScriptEngine::run(bytecode, (size_t)n, &result);
-        LOG_INFO("FieldControl: ScriptOp EXECUTE id='%s' completed=%d outputLen=%u", op.script_id, result.completed,
-                 (unsigned)result.outputLen);
-        replyWith(mp, requestId, result.completed, result.completed ? NULL : "script hit its step/time budget or was malformed",
-                   result.output, result.outputLen);
+        scriptBytecodeLen = (size_t)n;
+        scriptRequesterNode = getFrom(&mp);
+        scriptRequestChannel = mp.channel;
+        scriptRequestId = requestId;
+        scriptAbortRequested = false;
+
+        BaseType_t created = xTaskCreate(&FieldControlModule::scriptTaskEntry, "fieldscript", 8192, this, 1, &scriptTaskHandle);
+        if (created != pdPASS) {
+            scriptTaskHandle = nullptr;
+            replyWith(mp, requestId, false, "failed to start script task");
+            break;
+        }
+        LOG_INFO("FieldControl: ScriptOp EXECUTE id='%s' started in background task", op.script_id);
+        replyWith(mp, requestId, true, NULL); // ack: started. A separate FieldMessage(response) with the
+                                                // real result follows asynchronously when the task finishes.
         break;
     }
     case meshtastic_ScriptOp_Kind_LIST: {
@@ -290,16 +320,78 @@ void FieldControlModule::handleScriptOp(const meshtastic_MeshPacket &mp, uint32_
         replyWith(mp, requestId, ok, ok ? NULL : "delete failed");
         break;
     }
-    case meshtastic_ScriptOp_Kind_ABORT:
-        // EXECUTE runs synchronously (see ScriptEngine.h) and will already have
-        // finished by the time an ABORT could arrive - nothing to abort yet.
-        // Real mid-execution abort needs the background task added in Phase 6.
-        replyWith(mp, requestId, false, "no script running (execution is synchronous until Phase 6)");
+    case meshtastic_ScriptOp_Kind_ABORT: {
+        if (scriptTaskHandle == nullptr) {
+            replyWith(mp, requestId, false, "no script running");
+        } else {
+            scriptAbortRequested = true;
+            replyWith(mp, requestId, true, NULL); // ack: abort requested, not necessarily instant
+        }
         break;
+    }
     default:
         replyWith(mp, requestId, false, "unknown script op kind");
         break;
     }
+}
+
+// Entry point handed to xTaskCreate; just forwards to the instance method and cleans
+// itself up. Follows the same pattern as AudioModule's run_codec2/codec2HandlerTask.
+void FieldControlModule::scriptTaskEntry(void *param)
+{
+    static_cast<FieldControlModule *>(param)->runScriptTask();
+    vTaskDelete(nullptr);
+}
+
+void FieldControlModule::runScriptTask()
+{
+    // Only compute here - do not call into the mesh send path from this background
+    // task (see the class comment in FieldControlModule.h for why). sendScriptCompletion()
+    // does the actual send, from runOnce() on the main thread.
+    fieldcontrol::ScriptEngine::run(scriptBytecode, scriptBytecodeLen, &scriptResult, &scriptAbortRequested);
+    LOG_INFO("FieldControl: script task finished, completed=%d aborted=%d", scriptResult.completed, scriptResult.aborted);
+    scriptResultReady = true;
+    scriptTaskHandle = nullptr; // allow a new EXECUTE
+}
+
+void FieldControlModule::sendScriptCompletion()
+{
+    meshtastic_FieldMessage r = meshtastic_FieldMessage_init_default;
+    r.request_id = scriptRequestId;
+    r.which_payload_variant = meshtastic_FieldMessage_response_tag;
+    r.response.success = scriptResult.completed;
+    if (!scriptResult.completed) {
+        const char *why = scriptResult.aborted ? "script aborted" : "script hit its step/time budget or was malformed";
+        strncpy(r.response.error, why, sizeof(r.response.error) - 1);
+    }
+    if (scriptResult.outputLen) {
+        size_t n = scriptResult.outputLen < sizeof(r.response.result.bytes) ? scriptResult.outputLen
+                                                                             : sizeof(r.response.result.bytes);
+        memcpy(r.response.result.bytes, scriptResult.output, n);
+        r.response.result.size = n;
+    }
+
+    // This is an unsolicited follow-up, not a reply to a packet still in scope, so we
+    // can't use setReplyTo() here - address it manually instead. Meshtastic's own
+    // decoded.request_id (ack-linking) is deliberately left unset: it was already
+    // consumed by the immediate "started" reply - our own r.request_id above is what
+    // callers should match on for this async completion message.
+    meshtastic_MeshPacket *p = allocDataProtobuf(r);
+    p->to = scriptRequesterNode;
+    p->channel = scriptRequestChannel;
+    p->want_ack = true;
+    p->priority = meshtastic_MeshPacket_Priority_RELIABLE;
+    service->sendToMesh(p);
+    LOG_INFO("FieldControl: sent script completion, completed=%d", scriptResult.completed);
+}
+
+int32_t FieldControlModule::runOnce()
+{
+    if (scriptResultReady) {
+        scriptResultReady = false;
+        sendScriptCompletion();
+    }
+    return 500;
 }
 
 bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded)
@@ -312,6 +404,17 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
     }
 
     uint32_t requestId = decoded->request_id;
+
+    // Supplementary replay guard (see the class comment in FieldControlModule.h) - skip it
+    // for the response variant, which we never act on anyway.
+    if (decoded->which_payload_variant != meshtastic_FieldMessage_response_tag) {
+        NodeNum fromNode = getFrom(&mp);
+        if (isReplay(fromNode, requestId)) {
+            LOG_WARN("FieldControl: duplicate request_id %u from 0x%x, ignoring (possible replay)", requestId, fromNode);
+            return true;
+        }
+        rememberRequest(fromNode, requestId);
+    }
 
     switch (decoded->which_payload_variant) {
     case meshtastic_FieldMessage_wifi_tag:

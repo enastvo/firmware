@@ -37,11 +37,12 @@ struct Const {
 class Interpreter
 {
   public:
-    Interpreter(const uint8_t *bytecode, size_t len) : buf(bytecode), bufLen(len) {}
+    Interpreter(const uint8_t *bytecode, size_t len, volatile bool *abortFlag) : buf(bytecode), bufLen(len), abort(abortFlag) {}
 
     void run(ScriptRunResult *result)
     {
         result->completed = false;
+        result->aborted = false;
         result->outputLen = 0;
 
         if (!parseHeader()) {
@@ -54,6 +55,11 @@ class Interpreter
         bool ok = true;
 
         while (pc < bufLen) {
+            if (abort && *abort) {
+                ok = false;
+                result->aborted = true;
+                break;
+            }
             if (++steps > MAX_INSTRUCTIONS || millis() - startMs > MAX_WALLCLOCK_MS) {
                 ok = false;
                 break;
@@ -69,7 +75,11 @@ class Interpreter
                     ok = false;
                     break;
                 }
-                delay(readU16(pc));
+                if (!delayCheckingAbort(readU16(pc))) {
+                    ok = false;
+                    result->aborted = true;
+                    break;
+                }
                 pc += 2;
             } else if (op == OP_JMP) {
                 if (pc + 2 > bufLen) {
@@ -234,8 +244,25 @@ class Interpreter
         return v;
     }
 
+    // Waits ms in short slices so an abort request lands promptly instead of only
+    // being noticed between whole instructions. Returns false if aborted partway.
+    bool delayCheckingAbort(uint16_t ms)
+    {
+        uint32_t remaining = ms;
+        while (remaining > 0) {
+            if (abort && *abort) {
+                return false;
+            }
+            uint32_t step = remaining < 50 ? remaining : 50;
+            delay(step);
+            remaining -= step;
+        }
+        return true;
+    }
+
     const uint8_t *buf;
     size_t bufLen;
+    volatile bool *abort;
     size_t codeStart = 0;
     Const consts[MAX_CONSTS];
     uint8_t numConsts = 0;
@@ -246,9 +273,9 @@ class Interpreter
 
 } // namespace
 
-void ScriptEngine::run(const uint8_t *bytecode, size_t len, ScriptRunResult *result)
+void ScriptEngine::run(const uint8_t *bytecode, size_t len, ScriptRunResult *result, volatile bool *abortFlag)
 {
-    Interpreter interp(bytecode, len);
+    Interpreter interp(bytecode, len, abortFlag);
     interp.run(result);
 }
 
