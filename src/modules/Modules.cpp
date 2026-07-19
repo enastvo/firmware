@@ -73,6 +73,7 @@
 #endif
 
 #ifdef ARCH_ESP32
+#include "modules/FieldControlModule.h"
 #if defined(USE_SX1280) && !MESHTASTIC_EXCLUDE_AUDIO
 #include "modules/esp32/AudioModule.h"
 #endif
@@ -223,6 +224,7 @@ void setupModules()
 #endif
 #ifdef ARCH_ESP32
     // Only run on an esp32 based device.
+    fieldControlModule = new FieldControlModule();
 #if defined(USE_SX1280) && !MESHTASTIC_EXCLUDE_AUDIO
     audioModule = new AudioModule();
 #endif
