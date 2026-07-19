@@ -52,6 +52,9 @@ typedef struct _meshtastic_BtOp {
     meshtastic_BtOp_Kind kind;
     pb_byte_t addr[6];
     meshtastic_BtOp_data_t data;
+    /* Only used for GATT_READ/GATT_WRITE, e.g. "0000180f-0000-1000-8000-00805f9b34fb" */
+    char service_uuid[37];
+    char char_uuid[37];
 } meshtastic_BtOp;
 
 typedef PB_BYTES_ARRAY_T(64) meshtastic_NetOp_data_t;
@@ -126,13 +129,13 @@ extern "C" {
 
 /* Initializer values for message structs */
 #define meshtastic_WifiOp_init_default           {_meshtastic_WifiOp_Kind_MIN, "", ""}
-#define meshtastic_BtOp_init_default             {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}}
+#define meshtastic_BtOp_init_default             {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
 #define meshtastic_NetOp_init_default            {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}}
 #define meshtastic_ScriptOp_init_default         {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_default      {0, "", {0, {0}}}
 #define meshtastic_FieldMessage_init_default     {0, 0, {meshtastic_WifiOp_init_default}}
 #define meshtastic_WifiOp_init_zero              {_meshtastic_WifiOp_Kind_MIN, "", ""}
-#define meshtastic_BtOp_init_zero                {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}}
+#define meshtastic_BtOp_init_zero                {_meshtastic_BtOp_Kind_MIN, {0}, {0, {0}}, "", ""}
 #define meshtastic_NetOp_init_zero               {_meshtastic_NetOp_Kind_MIN, "", 0, {0, {0}}}
 #define meshtastic_ScriptOp_init_zero            {_meshtastic_ScriptOp_Kind_MIN, "", 0, 0, {0, {0}}, 0}
 #define meshtastic_FieldResult_init_zero         {0, "", {0, {0}}}
@@ -145,6 +148,8 @@ extern "C" {
 #define meshtastic_BtOp_kind_tag                 1
 #define meshtastic_BtOp_addr_tag                 2
 #define meshtastic_BtOp_data_tag                 3
+#define meshtastic_BtOp_service_uuid_tag         4
+#define meshtastic_BtOp_char_uuid_tag            5
 #define meshtastic_NetOp_kind_tag                1
 #define meshtastic_NetOp_host_tag                2
 #define meshtastic_NetOp_port_tag                3
@@ -176,7 +181,9 @@ X(a, STATIC,   SINGULAR, STRING,   psk,               3)
 #define meshtastic_BtOp_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    kind,              1) \
 X(a, STATIC,   SINGULAR, FIXED_LENGTH_BYTES, addr,              2) \
-X(a, STATIC,   SINGULAR, BYTES,    data,              3)
+X(a, STATIC,   SINGULAR, BYTES,    data,              3) \
+X(a, STATIC,   SINGULAR, STRING,   service_uuid,      4) \
+X(a, STATIC,   SINGULAR, STRING,   char_uuid,         5)
 #define meshtastic_BtOp_CALLBACK NULL
 #define meshtastic_BtOp_DEFAULT NULL
 
@@ -237,7 +244,7 @@ extern const pb_msgdesc_t meshtastic_FieldMessage_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_FIELD_CONTROL_PB_H_MAX_SIZE meshtastic_FieldMessage_size
-#define meshtastic_BtOp_size                     76
+#define meshtastic_BtOp_size                     152
 #define meshtastic_FieldMessage_size             209
 #define meshtastic_FieldResult_size              178
 #define meshtastic_NetOp_size                    139

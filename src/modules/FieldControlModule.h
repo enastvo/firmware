@@ -22,8 +22,9 @@
  * where PKI, which is inherently point-to-point, doesn't apply).
  *
  * Phase 2 adds real WiFi control (WifiControl, see src/fieldcontrol/) for
- * WifiOp SCAN/ASSOCIATE/DISASSOCIATE/STATUS. BtOp/NetOp/ScriptOp are still stubs
- * for later phases.
+ * WifiOp SCAN/ASSOCIATE/DISASSOCIATE/STATUS. Phase 3 adds real Bluetooth control
+ * (BtControl) for BtOp SCAN/CONNECT/DISCONNECT/GATT_READ/GATT_WRITE. NetOp/ScriptOp
+ * are still stubs for later phases.
  */
 class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
 {
@@ -38,6 +39,7 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>
                     const uint8_t *result = nullptr, size_t resultLen = 0);
     bool isAuthorized(const meshtastic_MeshPacket &mp);
     void handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_WifiOp &op);
+    void handleBtOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_BtOp &op);
 };
 
 extern FieldControlModule *fieldControlModule;

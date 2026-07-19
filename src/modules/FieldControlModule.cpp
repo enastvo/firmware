@@ -2,6 +2,7 @@
 #include "MeshService.h"
 #include "Router.h"
 #include "configuration.h"
+#include "fieldcontrol/BtControl.h"
 #include "fieldcontrol/WifiControl.h"
 #include "mesh/Channels.h"
 #include <cstring>
@@ -110,6 +111,67 @@ void FieldControlModule::handleWifiOp(const meshtastic_MeshPacket &mp, uint32_t 
 #endif
 }
 
+// Result encoding for BtOp.SCAN: [count(1) | strongestRssi(1) | addr(6) | name(<=31, no NUL)]
+// GATT_READ's result is just the raw characteristic value, capped to FieldResult.result's
+// 140-byte capacity. See the WifiOp comment above for why this isn't nested protobuf instead.
+void FieldControlModule::handleBtOp(const meshtastic_MeshPacket &mp, uint32_t requestId, const meshtastic_BtOp &op)
+{
+#if HAS_BLUETOOTH
+    using namespace fieldcontrol;
+
+    switch (op.kind) {
+    case meshtastic_BtOp_Kind_SCAN: {
+        BtScanResult best{};
+        int n = BtControl::scan(&best);
+        uint8_t buf[1 + 1 + 6 + sizeof(best.name)];
+        size_t len = 0;
+        buf[len++] = (uint8_t)(n < 0 ? 0 : (n > 255 ? 255 : n));
+        buf[len++] = (uint8_t)best.rssi;
+        memcpy(&buf[len], best.addr, 6);
+        len += 6;
+        size_t nameLen = strnlen(best.name, sizeof(best.name));
+        memcpy(&buf[len], best.name, nameLen);
+        len += nameLen;
+        LOG_INFO("FieldControl: BtOp SCAN found=%d", n);
+        replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "scan failed", buf, len);
+        break;
+    }
+    case meshtastic_BtOp_Kind_CONNECT: {
+        bool ok = BtControl::connect(op.addr);
+        LOG_INFO("FieldControl: BtOp CONNECT ok=%d", ok);
+        replyWith(mp, requestId, ok, ok ? NULL : "connect failed");
+        break;
+    }
+    case meshtastic_BtOp_Kind_DISCONNECT: {
+        BtControl::disconnect();
+        LOG_INFO("FieldControl: BtOp DISCONNECT");
+        replyWith(mp, requestId, true, NULL);
+        break;
+    }
+    case meshtastic_BtOp_Kind_GATT_READ: {
+        uint8_t buf[140];
+        int n = BtControl::gattRead(op.service_uuid, op.char_uuid, buf, sizeof(buf));
+        LOG_INFO("FieldControl: BtOp GATT_READ n=%d", n);
+        replyWith(mp, requestId, n >= 0, n >= 0 ? NULL : "gatt read failed", n > 0 ? buf : NULL, n > 0 ? (size_t)n : 0);
+        break;
+    }
+    case meshtastic_BtOp_Kind_GATT_WRITE: {
+        bool ok = BtControl::gattWrite(op.service_uuid, op.char_uuid, op.data.bytes, op.data.size);
+        LOG_INFO("FieldControl: BtOp GATT_WRITE ok=%d", ok);
+        replyWith(mp, requestId, ok, ok ? NULL : "gatt write failed");
+        break;
+    }
+    default:
+        replyWith(mp, requestId, false, "unknown bt op kind");
+        break;
+    }
+#else
+    (void)op;
+    LOG_WARN("FieldControl: BtOp received but HAS_BLUETOOTH is 0 on this build");
+    replyWith(mp, requestId, false, "bluetooth not supported on this hardware");
+#endif
+}
+
 bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded)
 {
     if (!isAuthorized(mp)) {
@@ -126,8 +188,7 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         handleWifiOp(mp, requestId, decoded->wifi);
         break;
     case meshtastic_FieldMessage_bt_tag:
-        LOG_WARN("FieldControl: BtOp not implemented until Phase 3");
-        replyWith(mp, requestId, false, "bt op not implemented yet");
+        handleBtOp(mp, requestId, decoded->bt);
         break;
     case meshtastic_FieldMessage_net_tag:
         LOG_WARN("FieldControl: NetOp not implemented until Phase 4");
