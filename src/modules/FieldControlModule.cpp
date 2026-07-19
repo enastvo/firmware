@@ -293,7 +293,11 @@ void FieldControlModule::handleScriptOp(const meshtastic_MeshPacket &mp, uint32_
         scriptRequestId = requestId;
         scriptAbortRequested = false;
 
-        BaseType_t created = xTaskCreate(&FieldControlModule::scriptTaskEntry, "fieldscript", 8192, this, 1, &scriptTaskHandle);
+        // 4096 rather than a larger stack: testing showed xTaskCreate can fail here
+        // under heap pressure after a WiFi association (which allocates its own
+        // buffers) - the interpreter loop itself doesn't need much depth, so a
+        // smaller stack buys more headroom without a real capability cost.
+        BaseType_t created = xTaskCreate(&FieldControlModule::scriptTaskEntry, "fieldscript", 4096, this, 1, &scriptTaskHandle);
         if (created != pdPASS) {
             scriptTaskHandle = nullptr;
             replyWith(mp, requestId, false, "failed to start script task");

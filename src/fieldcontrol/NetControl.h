@@ -31,9 +31,11 @@ class NetControl
      */
     static bool ping(const char *host, uint8_t count, PingResult *result);
 
-    /// Opens a TCP connection to host:port, replacing any existing one. Blocking
-    /// with a short internal timeout.
-    static bool tcpConnect(const char *host, uint16_t port);
+    /// Opens a TCP connection to host:port, replacing any existing one. Blocking,
+    /// up to timeoutMs (default 5000; pass a shorter value - e.g. 200-500ms - for
+    /// port-scan-style loops, since a refused port returns almost immediately but
+    /// a filtered/dropped one blocks for the full timeout on every attempt).
+    static bool tcpConnect(const char *host, uint16_t port, uint32_t timeoutMs = 5000);
 
     static void tcpClose();
     static bool tcpConnected();

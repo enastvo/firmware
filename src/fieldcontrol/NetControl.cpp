@@ -117,13 +117,13 @@ bool NetControl::ping(const char *host, uint8_t count, PingResult *result)
     return true;
 }
 
-bool NetControl::tcpConnect(const char *host, uint16_t port)
+bool NetControl::tcpConnect(const char *host, uint16_t port, uint32_t timeoutMs)
 {
     ensureWifiStackReady();
     if (sClient.connected()) {
         sClient.stop();
     }
-    return sClient.connect(host, port, 5000) != 0;
+    return sClient.connect(host, port, timeoutMs) != 0;
 }
 
 void NetControl::tcpClose()

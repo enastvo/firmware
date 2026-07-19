@@ -23,9 +23,15 @@ constexpr uint8_t OP_WIFI_DISASSOC = 0x12;
 constexpr uint8_t OP_WIFI_SCAN = 0x13;
 constexpr uint8_t OP_BT_SCAN = 0x20;
 constexpr uint8_t OP_NET_PING = 0x30;
+constexpr uint8_t OP_NET_TCP_CONNECT = 0x31;
+constexpr uint8_t OP_NET_TCP_CLOSE = 0x32;
 
 constexpr uint32_t MAX_INSTRUCTIONS = 1000;
-constexpr uint32_t MAX_WALLCLOCK_MS = 20000;
+// Was 20000ms; raised now that EXECUTE runs in its own background task (Phase 6) -
+// a longer-running script no longer blocks the module's own packet handling, so the
+// cost of a bigger budget is much lower. Sized to comfortably fit a port-scan loop
+// (e.g. ~80 ports * up to 300ms each for filtered/dropped ports = ~24s worst case).
+constexpr uint32_t MAX_WALLCLOCK_MS = 60000;
 constexpr size_t MAX_CONSTS = 16;
 constexpr size_t NUM_REGS = 4;
 
@@ -153,6 +159,28 @@ class Interpreter
                 regs[buf[pc + 1]] = pr.received;
                 appendOutput(op, pr.received);
                 pc += 2;
+            } else if (op == OP_NET_TCP_CONNECT) {
+                // hostConst:u8 portReg:u8 timeoutMs:u16 resultReg:u8 - port comes from a
+                // register (not an immediate) so a scan loop can vary it each iteration.
+                // Unlike NET_PING/WIFI_SCAN this only reports (appends output) on success,
+                // so a scan of many ports stays compact - see ScriptEngine.h.
+                if (pc + 5 > bufLen || buf[pc + 1] >= NUM_REGS || buf[pc + 4] >= NUM_REGS) {
+                    ok = false;
+                    break;
+                }
+                char hostBuf[64];
+                uint8_t hostC = buf[pc];
+                uint16_t port = (uint16_t)regs[buf[pc + 1]];
+                uint16_t timeoutMs = readU16(pc + 2);
+                uint8_t resultReg = buf[pc + 4];
+                pc += 5;
+                bool connected = NetControl::tcpConnect(constCStr(hostC, hostBuf, sizeof(hostBuf)), port, timeoutMs);
+                regs[resultReg] = connected ? 1 : 0;
+                if (connected) {
+                    appendOutput(op, port);
+                }
+            } else if (op == OP_NET_TCP_CLOSE) {
+                NetControl::tcpClose();
             }
 #endif
 #if HAS_BLUETOOTH
