@@ -16,6 +16,9 @@
 #include "target_specific.h"
 #ifdef ARCH_ESP32
 #include "modules/FieldControlModule.h"
+#if HAS_WIFI
+#include "fieldcontrol/WifiControl.h"
+#endif
 #endif
 #include <OLEDDisplay.h>
 #include <RTC.h>
@@ -799,7 +802,19 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     // === Second Row: Satellites and Voltage ===
     config.display.heading_bold = false;
 
+    // LoPhi: neither radio has GPS hardware, so this row was always just dead "No
+    // GPS" text - repurposed to show WiFi association state instead, which is
+    // actually meaningful here. WL_CONNECTED (WifiControl::status().connected) means
+    // fully associated + authenticated + DHCP complete, not just L2 association.
+#if defined(ARCH_ESP32) && HAS_WIFI
+    fieldcontrol::WifiStatus wifiStatus = fieldcontrol::WifiControl::status();
+#endif
 #if HAS_GPS
+#if defined(ARCH_ESP32) && HAS_WIFI
+    if (wifiStatus.connected) {
+        display->drawString(x, getTextPositions(display)[line], "on-net");
+    } else
+#endif
     if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
         const char *displayLine;
         if (config.position.fixed_position) {
