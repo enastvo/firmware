@@ -14,6 +14,9 @@
 #include "graphics/images.h"
 #include "main.h"
 #include "target_specific.h"
+#ifdef ARCH_ESP32
+#include "modules/FieldControlModule.h"
+#endif
 #include <OLEDDisplay.h>
 #include <RTC.h>
 #include <cstring>
@@ -746,10 +749,13 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
     // === Header ===
+    // LoPhi: always show our own full node address here (owner.id, e.g. "!02e8de08")
+    // so it's never ambiguous which physical radio a screen belongs to - see
+    // docs/architecture.md's OLED section.
     if (currentResolution == ScreenResolution::UltraLow) {
         graphics::drawCommonHeader(display, x, y, "Home");
     } else {
-        graphics::drawCommonHeader(display, x, y, "");
+        graphics::drawCommonHeader(display, x, y, owner.id);
     }
 
     // === Content below header ===
@@ -764,14 +770,28 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     bool origBold = config.display.heading_bold;
     config.display.heading_bold = false;
 
-    // Display Region and Channel Utilization
-    if (currentResolution == ScreenResolution::UltraLow) {
-        drawNodes(display, x, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
-    } else {
-        drawNodes(display, x + 1, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
+    // LoPhi: replaced the mesh "N online" indicator (ambiguous/confusing for a fixed
+    // two-node point-to-point pair - see docs/architecture.md's OLED section) with
+    // our own point-to-point link state + RSSI, overridden with a transient
+    // "Executing" (Agent, a command is actually running) or "Waiting for response"
+    // (Controller, a command it relayed hasn't been answered yet).
+    char linkStr[24] = "No Link";
+    bool linkIsLong = false;
+#ifdef ARCH_ESP32
+    if (fieldControlModule && fieldControlModule->isAwaitingResponse()) {
+        snprintf(linkStr, sizeof(linkStr), "Waiting for response");
+        linkIsLong = true;
+    } else if (fieldControlModule && fieldControlModule->isBusy()) {
+        snprintf(linkStr, sizeof(linkStr), "Executing");
+    } else if (fieldControlModule && fieldControlModule->havePeerLink()) {
+        snprintf(linkStr, sizeof(linkStr), "Link %ddBm", (int)fieldControlModule->getPeerRssi());
     }
+#endif
+    int linkX = (currentResolution == ScreenResolution::UltraLow) ? x : x + 1;
+    display->drawString(linkX, getTextPositions(display)[line], linkStr);
+
     char uptimeStr[32] = "";
-    if (currentResolution != ScreenResolution::UltraLow) {
+    if (currentResolution != ScreenResolution::UltraLow && !linkIsLong) {
         getUptimeStr(millis(), "Up: ", uptimeStr, sizeof(uptimeStr));
     }
     display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr), getTextPositions(display)[line++], uptimeStr);
@@ -1087,13 +1107,12 @@ void UIRenderer::drawScreensaverOverlay(OLEDDisplay *display, OLEDDisplayUiState
  */
 void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    // draw an xbm image.
-    // Please note that everything that should be transitioned
-    // needs to be drawn relative to x and y
-
-    // draw centered icon left to right and centered above the one line of app text
+    // LoPhi: no Meshtastic logo/banner on boot, just the "LoPhi" title below (and
+    // "Sleeping"/region text via upperMsg, when set) - see docs/architecture.md's
+    // OLED section for why (this fork's boot screen shouldn't look like stock
+    // Meshtastic). Please note that everything that should be transitioned needs to
+    // be drawn relative to x and y.
 #if defined(OLED_TINY)
-    display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - 28) / 2, icon_width, icon_height, icon_bits);
     display->setFont(FONT_MEDIUM);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -1119,12 +1138,9 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Restore left align, just to be kind to any other unsuspecting code
 #else
-    display->drawXbm(x + (SCREEN_WIDTH - icon_width) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_height) / 2 + 2,
-                     icon_width, icon_height, icon_bits);
-
     display->setFont(FONT_MEDIUM);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    const char *title = "meshtastic.org";
+    const char *title = "LoPhi";
     display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, title);
     display->setFont(FONT_SMALL);
     // Draw region in upper left

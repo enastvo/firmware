@@ -19,6 +19,9 @@
 #include "modules/NodeInfoModule.h"
 #include "modules/PositionModule.h"
 #include "modules/RoutingModule.h"
+#ifdef ARCH_ESP32
+#include "modules/FieldControlModule.h"
+#endif
 #include "power.h"
 #include <assert.h>
 #include <string>
@@ -201,6 +204,16 @@ void MeshService::handleToRadio(meshtastic_MeshPacket &p)
                   const StoredMessage &sm = messageStore.addFromPacket(p);
                   graphics::MessageRenderer::handleNewMessage(nullptr, sm, p); // notify UI
               })
+#ifdef ARCH_ESP32
+    // LoPhi: the Controller's own OLED shows "Waiting for response" while a command it
+    // just relayed is in flight - see FieldControlModule::isAwaitingResponse(). This is
+    // the only place that sees an outbound FieldMessage before it's encrypted/queued;
+    // handleReceivedProtobuf() (same module) clears the flag when the matching
+    // `response` FieldMessage comes back.
+    IF_SCREEN(if (fieldControlModule && p.decoded.portnum == meshtastic_PortNum_PRIVATE_APP && p.decoded.want_response) {
+        fieldControlModule->onOutboundRequestSent();
+    })
+#endif
     // Send the packet into the mesh
     DEBUG_HEAP_BEFORE;
     auto a = packetPool.allocCopy(p);

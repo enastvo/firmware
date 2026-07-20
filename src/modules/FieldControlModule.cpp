@@ -450,6 +450,11 @@ int32_t FieldControlModule::runOnce()
         scriptResultReady = false;
         sendScriptCompletion();
     }
+    if (awaitingResponse && (millis() - awaitingResponseSinceMs > AWAITING_RESPONSE_TIMEOUT_MS)) {
+        // No response arrived in time (dropped packet, unreachable peer, ...) - don't
+        // leave the screen stuck on "Waiting for response" forever.
+        awaitingResponse = false;
+    }
     return 500;
 }
 
@@ -464,6 +469,14 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
 
     uint32_t requestId = decoded->request_id;
 
+    // Every authorized FieldMessage, either direction, is from "the peer" - this
+    // project is always exactly one Controller and one Agent, so there's no need to
+    // track this per-node. Feeds the OLED's link-state+RSSI line (see
+    // FieldControlModule.h).
+    havePeerLink_ = true;
+    peerRssi = mp.rx_rssi;
+    peerLastHeardMs = millis();
+
     // Supplementary replay guard (see the class comment in FieldControlModule.h) - skip it
     // for the response variant, which we never act on anyway.
     if (decoded->which_payload_variant != meshtastic_FieldMessage_response_tag) {
@@ -475,6 +488,7 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         rememberRequest(fromNode, requestId);
     }
 
+    dispatching = true;
     switch (decoded->which_payload_variant) {
     case meshtastic_FieldMessage_wifi_tag:
         handleWifiOp(mp, requestId, decoded->wifi);
@@ -500,11 +514,14 @@ bool FieldControlModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp,
         // pubsub-based response matching (FieldClient._on_receive in tools/lophi.py) sees a
         // reply arrive back at the Controller. Returning false/CONTINUE here was a real bug:
         // every response was silently swallowed before ever reaching the phone/API layer.
+        dispatching = false;
+        awaitingResponse = false;
         return false;
     default:
         LOG_WARN("FieldControl: unknown payload_variant %d", decoded->which_payload_variant);
         break;
     }
+    dispatching = false;
 
     return true;
 }

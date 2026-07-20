@@ -1108,6 +1108,52 @@ void NodeDB::cleanupMeshDB()
     LOG_DEBUG("cleanupMeshDB purged %d entries", removed);
 }
 
+namespace
+{
+// LoPhi: default owner names are deterministically picked from this bank rather than
+// the stock "Meshtastic %04x" - see docs/architecture.md's OLED section. Combinatorial
+// (adjectives x nouns) rather than 1000 literal strings, for the same reason task #21
+// trimmed unused Meshtastic features: flash is worth conserving on this board. Exactly
+// 40 x 25 = 1000 distinct pseudonyms, matching what was asked for.
+constexpr const char *kPseudonymAdjectives[] = {
+    "Swift",   "Brave",  "Silent", "Clever", "Fierce", "Gentle",   "Rapid",  "Bold",  "Quiet",    "Sturdy",
+    "Nimble",  "Sharp",  "Steady", "Wild",   "Calm",   "Mighty",   "Sly",    "Keen",  "Loyal",    "Bright",
+    "Rustic",  "Hardy",  "Curious", "Vivid", "Stealthy", "Jolly", "Gritty", "Lucky", "Noble",    "Wary",
+    "Rugged",  "Zesty",  "Plucky", "Sunny",  "Dusty",  "Frosty",   "Shady",  "Spry",  "Wise",     "Restless",
+};
+constexpr const char *kPseudonymNouns[] = {
+    "Falcon", "Badger", "Otter", "Wolf",   "Hawk",    "Fox",     "Lynx",   "Raven", "Bear",  "Heron",
+    "Marten", "Osprey", "Coyote", "Puma",  "Egret",   "Mink",    "Kestrel", "Bobcat", "Ibis", "Weasel",
+    "Sable",  "Harrier", "Stoat", "Peregrine", "Vixen",
+};
+constexpr size_t kNumAdjectives = sizeof(kPseudonymAdjectives) / sizeof(kPseudonymAdjectives[0]);
+constexpr size_t kNumNouns = sizeof(kPseudonymNouns) / sizeof(kPseudonymNouns[0]);
+static_assert(kNumAdjectives * kNumNouns == 1000, "pseudonym bank must have exactly 1000 combinations");
+
+// Deterministic hash of the unit's own address (its node number, itself derived from
+// macaddr - see pickNewNodeNum()) into one of the 1000 pseudonyms. Same physical unit
+// always gets the same name; only changes if the device state is regenerated from
+// scratch, i.e. when freshly flashed - not on every reboot. MurmurHash3-style
+// finalizer mix, since raw modulo on a MAC-derived value risks clustering (units from
+// the same manufacturing batch/OUI share upper bits).
+void pickPseudonym(uint32_t nodeNum, char *longNameOut, size_t longNameLen, char *shortNameOut, size_t shortNameLen)
+{
+    uint32_t h = nodeNum;
+    h ^= h >> 16;
+    h *= 0x7feb352dU;
+    h ^= h >> 15;
+    h *= 0x846ca68bU;
+    h ^= h >> 16;
+    uint32_t idx = h % (kNumAdjectives * kNumNouns);
+    const char *adj = kPseudonymAdjectives[idx / kNumNouns];
+    const char *noun = kPseudonymNouns[idx % kNumNouns];
+    snprintf(longNameOut, longNameLen, "%s %s", adj, noun);
+    // short_name is capped at 4 usable chars (User.short_name max_size:5) - 2 letters
+    // from each word keeps it readable rather than truncating mid-word.
+    snprintf(shortNameOut, shortNameLen, "%.2s%.2s", adj, noun);
+}
+} // namespace
+
 void NodeDB::installDefaultDeviceState()
 {
     LOG_INFO("Install default DeviceState");
@@ -1125,15 +1171,18 @@ void NodeDB::installDefaultDeviceState()
 
     // Set default owner name
     pickNewNodeNum(); // based on macaddr now
+    char pseudoLongName[sizeof(owner.long_name)];
+    char pseudoShortName[sizeof(owner.short_name)];
+    pickPseudonym(getNodeNum(), pseudoLongName, sizeof(pseudoLongName), pseudoShortName, sizeof(pseudoShortName));
 #ifdef USERPREFS_CONFIG_OWNER_LONG_NAME
     snprintf(owner.long_name, sizeof(owner.long_name), (const char *)USERPREFS_CONFIG_OWNER_LONG_NAME);
 #else
-    snprintf(owner.long_name, sizeof(owner.long_name), "Meshtastic %04x", getNodeNum() & 0x0ffff);
+    snprintf(owner.long_name, sizeof(owner.long_name), "%s", pseudoLongName);
 #endif
 #ifdef USERPREFS_CONFIG_OWNER_SHORT_NAME
     snprintf(owner.short_name, sizeof(owner.short_name), (const char *)USERPREFS_CONFIG_OWNER_SHORT_NAME);
 #else
-    snprintf(owner.short_name, sizeof(owner.short_name), "%04x", getNodeNum() & 0x0ffff);
+    snprintf(owner.short_name, sizeof(owner.short_name), "%s", pseudoShortName);
 #endif
     snprintf(owner.id, sizeof(owner.id), "!%08x", getNodeNum()); // Default node ID now based on nodenum
     memcpy(owner.macaddr, ourMacAddr, sizeof(owner.macaddr));

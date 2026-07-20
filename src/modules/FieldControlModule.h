@@ -66,6 +66,37 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>, priva
   public:
     FieldControlModule();
 
+    // Screen (UIRenderer) reads these directly for the OLED's link-state line - see
+    // docs/architecture.md's OLED section. All point-to-point, single-peer concepts:
+    // this project is always exactly one Controller talking to one Agent, so there's
+    // no need to track link state per-node the way generic Meshtastic mesh UI does.
+
+    /// True while a command is actively running - either synchronously dispatching
+    /// (wifi/bt/net/file ops, which block handleReceivedProtobuf for their duration)
+    /// or a script executing in its background task. Agent's screen shows
+    /// "Executing"/"Idle" from this.
+    bool isBusy() const { return dispatching || scriptTaskHandle != nullptr; }
+
+    /// True from the moment this node relays an outbound FieldMessage with
+    /// want_response set (see MeshService::handleToRadio's hook) until the matching
+    /// `response` FieldMessage arrives - or AWAITING_RESPONSE_TIMEOUT_MS passes with
+    /// no reply (checked in runOnce()), so a dropped/unreachable command doesn't leave
+    /// the screen stuck on "Waiting for response" forever. Only meaningful on the
+    /// Controller (the Agent never originates requests), but harmless to read on
+    /// either.
+    bool isAwaitingResponse() const { return awaitingResponse; }
+    void onOutboundRequestSent()
+    {
+        awaitingResponse = true;
+        awaitingResponseSinceMs = millis();
+    }
+
+    /// RSSI of the last FieldMessage (request or response, either direction) received
+    /// from the peer, and when. havePeerLink() is false until the very first one.
+    bool havePeerLink() const { return havePeerLink_; }
+    int32_t getPeerRssi() const { return peerRssi; }
+    uint32_t getPeerLastHeardMs() const { return peerLastHeardMs; }
+
   protected:
     virtual bool handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_FieldMessage *decoded) override;
     virtual int32_t runOnce() override;
@@ -104,6 +135,14 @@ class FieldControlModule : public ProtobufModule<meshtastic_FieldMessage>, priva
     uint32_t scriptRequestId = 0;
     static uint8_t scriptBytecode[fieldcontrol::ScriptStore::MAX_SCRIPT_SIZE];
     size_t scriptBytecodeLen = 0;
+
+    static constexpr uint32_t AWAITING_RESPONSE_TIMEOUT_MS = 60000;
+    bool dispatching = false;
+    bool awaitingResponse = false;
+    uint32_t awaitingResponseSinceMs = 0;
+    bool havePeerLink_ = false;
+    int32_t peerRssi = 0;
+    uint32_t peerLastHeardMs = 0;
 };
 
 extern FieldControlModule *fieldControlModule;
